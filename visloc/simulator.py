@@ -46,7 +46,13 @@ def make_path(
     elif kind == "zigzag":
         x = margin + t * (world_w - 2 * margin)
         # Triangle wave across the y-range.
-        period = 0.2
+        # period=0.2 (5 full up-down cycles across n_frames) was the
+        # original value, but it forces ~65px/frame vertical motion on a
+        # typical 1300px-tall world over 200 frames - well outside the LK
+        # capture-range limit documented in odometry.py (~25px/frame was
+        # already found to be a realistic ceiling). 0.5 (2 cycles) keeps
+        # the path visually zigzag while matching loop/straight's speed.
+        period = 0.5
         phase = (t / period) % 1.0
         tri = np.where(phase < 0.5, phase * 2, 2 - phase * 2)
         y = margin + tri * (world_h - 2 * margin)

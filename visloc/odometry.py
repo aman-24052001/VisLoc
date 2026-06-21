@@ -97,13 +97,40 @@ class RelativeOdometry:
         world_dx, world_dy = -median_disp[0], -median_disp[1]
         return OdometryResult(success=True, dx=float(world_dx), dy=float(world_dy), n_tracked=n_tracked)
 
-    def track_path(self, frames: list) -> np.ndarray:
+    def track_path(self, frames: list, start_xy: tuple[float, float] | None = None) -> np.ndarray:
         """Integrate frame-to-frame estimates into an absolute path.
 
-        Starts at frames[0]'s ground-truth position (mirrors how the real
-        system bootstraps from a single fix) and accumulates relative
-        deltas from there with no further correction - this is the
-        "raw odometry only" baseline that's expected to drift.
+        By default, starts at frames[0]'s ground-truth position (mirrors
+        how the real system bootstraps from a single fix) and accumulates
+        relative deltas from there with no further correction - this is
+        the "raw odometry only" baseline that's expected to drift.
+
+        Pass start_xy explicitly to integrate from an arbitrary local
+        origin instead (e.g. (0, 0)) - used when VIO's own unanchored
+        local frame is needed before it's been aligned to world
+        coordinates via a VPS fix (see visloc/fusion.py).
+
+        Known limitation (two fixes tried and rejected - see commit
+        history): a single catastrophic LK mistracking event at a sharp
+        direction-reversal point (confirmed on a zigzag corner) gets
+        permanently baked into this cumulative sum, with no way to undo
+        it - and can eventually grow large enough that a downstream
+        Mahalanobis gate (fusion.py) starts rejecting the correction
+        too, since a corrupted state and a bad measurement look
+        identical to it. Two outlier-rejection attempts were tried:
+        (1) substituting a rolling-median delta on large deviation -
+        rejected because a *genuine* sharp turn deviates from recent
+        history by a similar magnitude to a bad estimate, so real turns
+        got suppressed too, sometimes permanently; (2) median-filtering
+        the whole delta sequence before integrating - rejected because
+        median filtering isn't bias-preserving (it favours whichever
+        value is locally more frequent), introducing a small systematic
+        bias on *every* normal frame that compounds via cumsum and was
+        worse than the rare event it targeted. Left unfiltered: rare
+        single-frame corruption is a known, undocumented-away limitation
+        rather than a silently-introduced bias on the common case. The
+        real ngps_flight project this is modeled on has the same open
+        gap (listed in its own TODO as "no fallback VO pipeline yet").
 
         Returns an array of shape (len(frames), 2) of estimated (x, y).
         On a failed estimate between two frames, holds position (zero
@@ -111,7 +138,7 @@ class RelativeOdometry:
         to error should be interpreted accordingly.
         """
         path = np.zeros((len(frames), 2), dtype=np.float64)
-        path[0] = [frames[0].gt_x, frames[0].gt_y]
+        path[0] = start_xy if start_xy is not None else [frames[0].gt_x, frames[0].gt_y]
 
         for i in range(1, len(frames)):
             res = self.estimate(frames[i - 1].image, frames[i].image)
