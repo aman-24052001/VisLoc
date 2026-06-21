@@ -1,0 +1,4 @@
+numpy>=1.26
+opencv-python-headless>=4.9
+filterpy>=1.4.5
+pytest>=8.0
