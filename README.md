@@ -15,16 +15,27 @@ Inspired by [`ngps_flight`](https://github.com/snktshrma/ngps_flight) /
 GSoC 2024 and follow-on work). This is an independent, simulation-only
 reproduction for learning/portfolio purposes — not a fork of that codebase.
 
-## Status: Phase 3 of 6
+## Status: Phase 4 of 6
 
 - [x] **Phase 1** — Synthetic world generator + frame simulator + ORB-based absolute localizer
 - [x] **Phase 2** — Optical flow odometry + drift-only baseline
 - [x] **Phase 3** — UKF fusion
-- [ ] Phase 4 — Dashboard (live simulation view)
+- [x] **Phase 4** — Dashboard (live simulation view)
 - [ ] Phase 5 — Parameter sandbox
 - [ ] Phase 6 — Deploy + docs
 
 See [`PRD.md`](PRD.md) for the full design doc.
+
+## Live dashboard
+
+**[aman-24052001.github.io/VisLoc](https://aman-24052001.github.io/VisLoc/)**
+
+Static, no backend — animated playback of the canonical scenario (ground
+truth vs. raw odometry vs. UKF-fused path), live camera-feed crop, a VPS
+lock indicator that fires on real fix frames with actual inlier-match
+counts, and a live error-over-time chart. All data is precomputed by
+`visloc/export_dashboard_data.py` and shipped as a ~13KB JSON file plus a
+sprite sheet of all 200 camera crops (one image, not 200 requests).
 
 ## Headline result
 
@@ -160,5 +171,6 @@ python -m visloc.localizer        # runs the localizer against simulated frames
 python -m visloc.odometry         # runs raw odometry tracking, prints drift stats
 python -m visloc.evaluate_drift   # generates the Phase 2 baseline charts
 python -m visloc.evaluate_fusion  # generates the Phase 3 fusion comparison charts
+python -m visloc.export_dashboard_data  # generates docs/assets/* for the dashboard
 pytest tests/ -v
 ```

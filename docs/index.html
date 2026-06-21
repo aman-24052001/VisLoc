@@ -1,0 +1,424 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VisLoc — GPS-Denied Visual Localization</title>
+<meta name="description" content="A simulated GPS-denied visual localization pipeline: feature-matching absolute fixes fused with optical-flow odometry via a UKF.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0a0d12;
+    --panel:#11151c;
+    --panel-2:#161b24;
+    --line:#262c38;
+    --text:#e8e6e1;
+    --text-dim:#8b93a3;
+    --amber:#f5b942;
+    --amber-dim:#7a611f;
+    --coral:#e2574c;
+    --white:#f1f3f5;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;background:var(--bg);color:var(--text);
+    font-family:'JetBrains Mono',monospace;}
+  h1,h2,h3{font-family:'Fraunces',serif;font-weight:600;margin:0;}
+  a{color:var(--amber);text-decoration:none;}
+  :focus-visible{outline:2px solid var(--amber);outline-offset:2px;border-radius:2px;}
+
+  header{position:sticky;top:0;z-index:10;display:flex;align-items:center;
+    justify-content:space-between;padding:18px 28px;background:rgba(10,13,18,.88);
+    backdrop-filter:blur(6px);border-bottom:1px solid var(--line);}
+  .brand{font-weight:700;letter-spacing:.12em;font-size:14px;color:var(--amber);}
+  nav.dots{display:flex;gap:22px;}
+  nav.dots a{display:flex;align-items:center;gap:8px;font-size:11px;
+    letter-spacing:.06em;color:var(--text-dim);text-transform:uppercase;}
+  nav.dots .dot{width:7px;height:7px;border-radius:50%;background:var(--line);
+    display:inline-block;transition:background .2s;}
+  nav.dots a.active .dot{background:var(--amber);}
+  nav.dots a.active{color:var(--text);}
+
+  section{padding:64px 28px;max-width:1180px;margin:0 auto;}
+
+  .hero{padding-top:90px;padding-bottom:80px;}
+  .hero h1{font-size:clamp(34px,6vw,58px);line-height:1.08;max-width:720px;}
+  .hero h1 .accent{color:var(--amber);}
+  .hero .lede{max-width:560px;color:var(--text-dim);font-size:15px;line-height:1.7;
+    margin-top:22px;}
+  .stat-row{display:flex;gap:40px;margin-top:42px;flex-wrap:wrap;}
+  .stat .num{display:block;font-family:'Fraunces',serif;font-size:38px;
+    color:var(--amber);font-weight:600;}
+  .stat .label{display:block;font-size:11px;color:var(--text-dim);
+    text-transform:uppercase;letter-spacing:.05em;margin-top:4px;}
+  .cta{display:inline-flex;align-items:center;gap:8px;margin-top:46px;
+    font-size:13px;letter-spacing:.04em;border:1px solid var(--amber-dim);
+    padding:11px 18px;border-radius:3px;transition:border-color .2s,background .2s;}
+  .cta:hover{border-color:var(--amber);background:rgba(245,185,66,.06);}
+
+  .sim-grid{display:grid;grid-template-columns:1.6fr 1fr;gap:18px;}
+  @media (max-width:880px){.sim-grid{grid-template-columns:1fr;}}
+
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:4px;
+    padding:16px;}
+  .map-panel{padding:10px;display:flex;align-items:center;justify-content:center;}
+  #mapCanvas{width:100%;height:auto;border-radius:2px;display:block;}
+
+  .telemetry{display:flex;flex-direction:column;gap:14px;}
+  .telemetry-block{background:var(--panel);border:1px solid var(--line);
+    border-radius:4px;padding:14px;}
+  .block-label{font-size:10px;letter-spacing:.1em;color:var(--text-dim);
+    text-transform:uppercase;margin-bottom:10px;}
+
+  #cropCanvas{width:100%;aspect-ratio:1/1;border-radius:2px;display:block;
+    background:#000;image-rendering:pixelated;}
+
+  .vps-indicator{display:flex;align-items:center;gap:10px;font-size:13px;}
+  .vps-dot{width:9px;height:9px;border-radius:50%;background:var(--line);
+    box-shadow:0 0 0 0 rgba(245,185,66,0);transition:background .15s;}
+  .vps-indicator.locked .vps-dot{background:var(--amber);
+    box-shadow:0 0 10px 2px rgba(245,185,66,.55);}
+  .vps-indicator.locked #vpsText{color:var(--amber);}
+  #vpsText{color:var(--text-dim);}
+  .vps-sub{font-size:10.5px;color:var(--text-dim);margin-top:6px;}
+
+  #errorChart{width:100%;height:120px;display:block;}
+  .legend{display:flex;gap:16px;margin-top:8px;font-size:10.5px;color:var(--text-dim);}
+  .legend span{display:inline-flex;align-items:center;gap:6px;}
+  .swatch{width:10px;height:3px;display:inline-block;border-radius:1px;}
+
+  .transport{display:flex;align-items:center;gap:14px;margin-top:16px;
+    background:var(--panel);border:1px solid var(--line);border-radius:4px;
+    padding:12px 16px;}
+  #playBtn{width:34px;height:34px;border-radius:50%;border:1px solid var(--amber-dim);
+    background:transparent;color:var(--amber);font-size:13px;cursor:pointer;
+    display:flex;align-items:center;justify-content:center;flex:none;}
+  #playBtn:hover{background:rgba(245,185,66,.08);}
+  #scrub{flex:1;accent-color:#f5b942;}
+  #frameLabel{font-size:11px;color:var(--text-dim);white-space:nowrap;min-width:108px;}
+  #speedSelect{background:var(--panel-2);color:var(--text);border:1px solid var(--line);
+    border-radius:3px;font-family:inherit;font-size:11px;padding:6px 8px;}
+
+  .results table{width:100%;border-collapse:collapse;margin-top:20px;font-size:13px;}
+  .results th,.results td{text-align:right;padding:10px 14px;border-bottom:1px solid var(--line);}
+  .results th:first-child,.results td:first-child{text-align:left;}
+  .results th{color:var(--text-dim);font-weight:400;text-transform:uppercase;
+    font-size:10.5px;letter-spacing:.06em;}
+  .results td.reduction{color:var(--amber);}
+  .results p{color:var(--text-dim);font-size:14px;line-height:1.8;max-width:680px;}
+  .results .note{font-size:12px;border-left:2px solid var(--amber-dim);
+    padding:4px 0 4px 16px;margin-top:28px;color:var(--text-dim);max-width:680px;}
+
+  footer{padding:36px 28px;text-align:center;color:var(--text-dim);
+    font-size:11px;border-top:1px solid var(--line);}
+  footer a{color:var(--text-dim);border-bottom:1px solid var(--line);}
+
+  @media (max-width:480px){
+    header{padding:14px 16px;}
+    .brand{font-size:12px;}
+    nav.dots{gap:14px;}
+    nav.dots a{font-size:0;gap:0;}
+    nav.dots .dot{width:8px;height:8px;}
+    section{padding:44px 18px;}
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">VISLOC</div>
+  <nav class="dots">
+    <a href="#overview" class="nav-link active" data-target="overview"><span class="dot"></span>Overview</a>
+    <a href="#simulation" class="nav-link" data-target="simulation"><span class="dot"></span>Simulation</a>
+    <a href="#results" class="nav-link" data-target="results"><span class="dot"></span>Results</a>
+  </nav>
+</header>
+
+<section id="overview" class="hero">
+  <h1>GPS fails.<br><span class="accent">Cameras don't have to.</span></h1>
+  <p class="lede">A simulated visual localization pipeline for GPS-denied
+    navigation: feature-matching against a known map for an absolute (but
+    slow) fix, optical-flow odometry for a fast (but drifting) relative
+    estimate, fused by an Unscented Kalman Filter into a single stable
+    position track.</p>
+  <div class="stat-row">
+    <div class="stat"><span class="num">70.6%</span><span class="label">final drift reduction</span></div>
+    <div class="stat"><span class="num">50.9%</span><span class="label">mean error reduction</span></div>
+    <div class="stat"><span class="num">$0</span><span class="label">GPU / drone / paid imagery</span></div>
+  </div>
+  <a class="cta" href="#simulation">Run the simulation ↓</a>
+</section>
+
+<section id="simulation" class="sim">
+  <h2 style="margin-bottom:22px;font-size:22px;">Live simulation</h2>
+  <div class="sim-grid">
+    <div class="panel map-panel">
+      <canvas id="mapCanvas"></canvas>
+    </div>
+    <aside class="telemetry">
+      <div class="telemetry-block">
+        <div class="block-label">Camera feed</div>
+        <canvas id="cropCanvas"></canvas>
+      </div>
+      <div class="telemetry-block">
+        <div class="block-label">Absolute fix (VPS)</div>
+        <div id="vpsIndicator" class="vps-indicator">
+          <span class="vps-dot"></span><span id="vpsText">tracking…</span>
+        </div>
+        <div class="vps-sub" id="vpsSub">runs every 10 frames</div>
+      </div>
+      <div class="telemetry-block">
+        <div class="block-label">Position error</div>
+        <canvas id="errorChart"></canvas>
+        <div class="legend">
+          <span><i class="swatch" style="background:var(--coral)"></i>raw odometry</span>
+          <span><i class="swatch" style="background:var(--amber)"></i>UKF fused</span>
+        </div>
+      </div>
+    </aside>
+  </div>
+  <div class="transport">
+    <button id="playBtn" aria-label="Play">▶</button>
+    <input type="range" id="scrub" min="0" max="199" value="0">
+    <span id="frameLabel">frame 0 / 199</span>
+    <select id="speedSelect">
+      <option value="2">0.5x</option>
+      <option value="1" selected>1x</option>
+      <option value="0.5">2x</option>
+      <option value="0.25">4x</option>
+    </select>
+  </div>
+</section>
+
+<section id="results" class="results">
+  <h2 style="margin-bottom:6px;font-size:22px;">Results</h2>
+  <p>Standard scenario: 200-frame loop, ±2° camera yaw, σ=1.5px position
+    noise, absolute fix attempted every 10 frames.</p>
+  <table>
+    <thead><tr><th>Metric</th><th>Raw odometry</th><th>UKF fused</th><th>Reduction</th></tr></thead>
+    <tbody>
+      <tr><td>Final drift</td><td>12.73px</td><td>3.74px</td><td class="reduction">70.6%</td></tr>
+      <tr><td>Mean error</td><td>7.99px</td><td>3.92px</td><td class="reduction">50.9%</td></tr>
+      <tr><td>Max error</td><td>13.14px</td><td>7.36px</td><td class="reduction">44.0%</td></tr>
+    </tbody>
+  </table>
+  <p class="note">Fusion's benefit is scenario-dependent, not universal — it
+    helps most when raw odometry drift is substantial relative to the
+    localizer's own measurement noise (~4px). When VIO is already that
+    accurate on its own, there's little room left for fusion to improve on
+    it. Full validation, including a known open limitation around sharp
+    direction-reversal points, is documented in the repository README.</p>
+</section>
+
+<footer>
+  Inspired by <a href="https://github.com/snktshrma/ngps_flight" target="_blank" rel="noopener">ngps_flight</a>
+  / <a href="https://github.com/snktshrma/ap_nongps" target="_blank" rel="noopener">ap_nongps</a>
+  (Sanket Sharma, ArduPilot GSoC 2024) — an independent, simulation-only reproduction.
+  &nbsp;·&nbsp; <a href="https://github.com/aman-24052001/VisLoc" target="_blank" rel="noopener">Source on GitHub</a>
+</footer>
+
+<script>
+(async function(){
+  const COLORS = { gt: '#f1f3f5', vio: '#e2574c', fused: '#f5b942' };
+
+  const res = await fetch('assets/data.json');
+  const data = await res.json();
+  const N = data.meta.n_frames;
+  const W = data.meta.world_display.w, H = data.meta.world_display.h;
+  const sprite = data.meta.sprite;
+
+  const worldImg = new Image();
+  const spriteImg = new Image();
+  await Promise.all([
+    new Promise(r => { worldImg.onload = r; worldImg.src = 'assets/world.jpg'; }),
+    new Promise(r => { spriteImg.onload = r; spriteImg.src = 'assets/crops_sprite.jpg'; }),
+  ]);
+
+  // --- Map canvas setup ---
+  const mapCanvas = document.getElementById('mapCanvas');
+  mapCanvas.width = W; mapCanvas.height = H;
+  const mctx = mapCanvas.getContext('2d');
+
+  // --- Crop canvas setup ---
+  const cropCanvas = document.getElementById('cropCanvas');
+  cropCanvas.width = sprite.cell; cropCanvas.height = sprite.cell;
+  const cctx = cropCanvas.getContext('2d');
+
+  // --- Error chart setup ---
+  const errCanvas = document.getElementById('errorChart');
+  const dpr = window.devicePixelRatio || 1;
+  const errCssW = errCanvas.clientWidth || 280, errCssH = 120;
+  errCanvas.width = errCssW * dpr; errCanvas.height = errCssH * dpr;
+  const ectx = errCanvas.getContext('2d');
+  ectx.scale(dpr, dpr);
+  const maxErr = Math.max(...data.err_vio, ...data.err_fused) * 1.08;
+
+  function drawPath(ctx, pts, upTo, color, dash) {
+    ctx.save();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2.4;
+    ctx.setLineDash(dash || []);
+    ctx.beginPath();
+    let started = false;
+    for (let i = 0; i <= upTo; i++) {
+      const p = pts[i];
+      if (!p || p[0] == null || Number.isNaN(p[0])) continue;
+      if (!started) { ctx.moveTo(p[0], p[1]); started = true; }
+      else ctx.lineTo(p[0], p[1]);
+    }
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function drawDot(ctx, p, color, r) {
+    if (!p || p[0] == null) return;
+    ctx.save();
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(p[0], p[1], r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  let frame = 0;
+  let lockPulseUntil = -1;
+
+  function renderMap() {
+    mctx.clearRect(0, 0, W, H);
+    mctx.drawImage(worldImg, 0, 0, W, H);
+
+    drawPath(mctx, data.gt_path, frame, COLORS.gt, []);
+    drawPath(mctx, data.vio_path, frame, COLORS.vio, [7, 5]);
+    drawPath(mctx, data.fused_path, frame, COLORS.fused, [2, 4]);
+
+    drawDot(mctx, data.gt_path[frame], COLORS.gt, 4);
+    drawDot(mctx, data.vio_path[frame], COLORS.vio, 4);
+    drawDot(mctx, data.fused_path[frame], COLORS.fused, 4.5);
+
+    // VPS lock ring, pulses briefly right after a fix frame
+    if (frame <= lockPulseUntil) {
+      const p = data.gt_path[frame];
+      if (p) {
+        const t = 1 - (lockPulseUntil - frame) / 8;
+        mctx.save();
+        mctx.strokeStyle = 'rgba(245,185,66,' + (1 - t) + ')';
+        mctx.lineWidth = 2;
+        mctx.beginPath();
+        mctx.arc(p[0], p[1], 10 + t * 22, 0, Math.PI * 2);
+        mctx.stroke();
+        mctx.restore();
+      }
+    }
+  }
+
+  function renderCrop() {
+    const col = frame % sprite.cols, row = Math.floor(frame / sprite.cols);
+    cctx.clearRect(0, 0, sprite.cell, sprite.cell);
+    cctx.drawImage(spriteImg,
+      col * sprite.cell, row * sprite.cell, sprite.cell, sprite.cell,
+      0, 0, sprite.cell, sprite.cell);
+  }
+
+  function renderVps() {
+    const indicator = document.getElementById('vpsIndicator');
+    const text = document.getElementById('vpsText');
+    const sub = document.getElementById('vpsSub');
+    const isFix = data.vps_fix_frames.includes(frame);
+    if (isFix) {
+      lockPulseUntil = frame + 8;
+      const conf = data.vps_confidence[String(frame)];
+      indicator.classList.add('locked');
+      text.textContent = 'LOCKED';
+      sub.textContent = conf ? conf + ' inlier matches · frame ' + frame : 'frame ' + frame;
+    } else if (frame > lockPulseUntil) {
+      indicator.classList.remove('locked');
+      text.textContent = 'tracking…';
+      const next = data.vps_fix_frames.find(f => f > frame);
+      sub.textContent = next != null ? 'next fix in ' + (next - frame) + ' frames' : 'flight complete';
+    }
+  }
+
+  function renderErrorChart() {
+    ectx.clearRect(0, 0, errCssW, errCssH);
+    const padL = 4, padR = 4, padT = 6, padB = 6;
+    const plotW = errCssW - padL - padR, plotH = errCssH - padT - padB;
+    const xAt = i => padL + (i / (N - 1)) * plotW;
+    const yAt = v => padT + plotH - (v / maxErr) * plotH;
+
+    function drawSeries(arr, color) {
+      ectx.strokeStyle = color;
+      ectx.lineWidth = 1.6;
+      ectx.beginPath();
+      for (let i = 0; i <= frame; i++) {
+        const x = xAt(i), y = yAt(arr[i]);
+        if (i === 0) ectx.moveTo(x, y); else ectx.lineTo(x, y);
+      }
+      ectx.stroke();
+    }
+    drawSeries(data.err_vio, COLORS.vio);
+    drawSeries(data.err_fused, COLORS.fused);
+  }
+
+  function renderFrameLabel() {
+    document.getElementById('frameLabel').textContent = 'frame ' + frame + ' / ' + (N - 1);
+    document.getElementById('scrub').value = frame;
+  }
+
+  function renderAll() {
+    renderMap(); renderCrop(); renderVps(); renderErrorChart(); renderFrameLabel();
+  }
+
+  // --- Playback control ---
+  let playing = false, timer = null;
+  const playBtn = document.getElementById('playBtn');
+  const scrub = document.getElementById('scrub');
+  const speedSelect = document.getElementById('speedSelect');
+  scrub.max = N - 1;
+
+  function tick() {
+    frame = (frame + 1) % N;
+    if (frame === 0) lockPulseUntil = -1;
+    renderAll();
+  }
+
+  function startPlaying() {
+    playing = true; playBtn.textContent = '❙❙';
+    const ms = 90 * parseFloat(speedSelect.value);
+    timer = setInterval(tick, ms);
+  }
+  function stopPlaying() {
+    playing = false; playBtn.textContent = '▶';
+    clearInterval(timer);
+  }
+
+  playBtn.addEventListener('click', () => playing ? stopPlaying() : startPlaying());
+  scrub.addEventListener('input', e => {
+    frame = parseInt(e.target.value, 10);
+    lockPulseUntil = -1;
+    renderAll();
+  });
+  speedSelect.addEventListener('change', () => {
+    if (playing) { stopPlaying(); startPlaying(); }
+  });
+
+  renderAll();
+  if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    startPlaying();
+  }
+
+  // --- Nav active-state on scroll ---
+  const links = document.querySelectorAll('.nav-link');
+  const targets = ['overview', 'simulation', 'results'].map(id => document.getElementById(id));
+  const obs = new IntersectionObserver(entries => {
+    entries.forEach(e => {
+      if (e.isIntersecting) {
+        links.forEach(l => l.classList.toggle('active', l.dataset.target === e.target.id));
+      }
+    });
+  }, { threshold: 0.5 });
+  targets.forEach(t => obs.observe(t));
+})();
+</script>
+</body>
+</html>
