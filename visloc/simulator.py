@@ -112,7 +112,13 @@ class FrameSimulator:
             yaw = self.rng.uniform(-self.max_yaw_deg, self.max_yaw_deg) if self.max_yaw_deg else 0.0
 
             crop = self._crop_at(nx, ny, yaw)
-            frames.append(Frame(index=i, image=crop, gt_x=px, gt_y=py, gt_yaw_deg=yaw))
+            # Ground truth = the actual (jittered) pose the crop was rendered
+            # at, not the idealized waypoint (px, py). The waypoint is just
+            # the design intent; what the camera really saw is centred on
+            # (nx, ny). Using the waypoint as "ground truth" would silently
+            # mismeasure frame-to-frame odometry error later, since odometry
+            # estimates motion between the *actual* rendered frames.
+            frames.append(Frame(index=i, image=crop, gt_x=nx, gt_y=ny, gt_yaw_deg=yaw))
         return frames
 
 
