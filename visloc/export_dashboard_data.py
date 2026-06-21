@@ -30,8 +30,8 @@ PATH_KIND = "loop"
 SCENARIO_SEED = 7
 VPS_RATE = 10
 
-WORLD_DISPLAY_MAX = 1000   # max dimension of the exported world image
-CROP_THUMB_SIZE = 110      # each sprite cell, downsized from CROP_SIZE
+WORLD_DISPLAY_MAX = 1600  # was 1000 - much less downscale from native 1800, visibly sharper
+CROP_THUMB_SIZE = 200     # was 110 (downsampled) - now native CROP_SIZE, no quality loss
 SPRITE_COLS = 20           # 200 frames / 20 cols = 10 rows
 
 OUT_DIR = "docs/assets"
@@ -66,17 +66,24 @@ def main():
     orig_h, orig_w = world.shape[:2]
     scale = WORLD_DISPLAY_MAX / max(orig_w, orig_h)
     disp_w, disp_h = int(orig_w * scale), int(orig_h * scale)
-    world_disp = cv2.resize(world, (disp_w, disp_h), interpolation=cv2.INTER_AREA)
-    cv2.imwrite(f"{OUT_DIR}/world.jpg", world_disp, [cv2.IMWRITE_JPEG_QUALITY, 85])
+    # WebP, not JPEG/PNG: tested all three at this resolution. PNG is
+    # lossless but huge (4.7MB) because the speckle noise texture doesn't
+    # compress well losslessly. JPEG-85 (the original choice) is visibly
+    # blocky at this size; JPEG-95 fixes that but costs ~1.1MB. WebP-92
+    # matches JPEG-95's visual quality at roughly half the file size.
+    interp = cv2.INTER_AREA if scale < 1 else cv2.INTER_LANCZOS4
+    world_disp = cv2.resize(world, (disp_w, disp_h), interpolation=interp)
+    cv2.imwrite(f"{OUT_DIR}/world.webp", world_disp, [cv2.IMWRITE_WEBP_QUALITY, 92])
 
-    # --- Sprite sheet of all camera crops ---
+    # --- Sprite sheet of all camera crops (native resolution, no downsampling) ---
     n_rows = math.ceil(len(frames) / SPRITE_COLS)
     sprite = np.zeros((n_rows * CROP_THUMB_SIZE, SPRITE_COLS * CROP_THUMB_SIZE, 3), dtype=np.uint8)
     for i, f in enumerate(frames):
-        thumb = cv2.resize(f.image, (CROP_THUMB_SIZE, CROP_THUMB_SIZE), interpolation=cv2.INTER_AREA)
+        thumb = f.image if CROP_THUMB_SIZE == CROP_SIZE else cv2.resize(
+            f.image, (CROP_THUMB_SIZE, CROP_THUMB_SIZE), interpolation=cv2.INTER_LANCZOS4)
         r, c = divmod(i, SPRITE_COLS)
         sprite[r * CROP_THUMB_SIZE:(r + 1) * CROP_THUMB_SIZE, c * CROP_THUMB_SIZE:(c + 1) * CROP_THUMB_SIZE] = thumb
-    cv2.imwrite(f"{OUT_DIR}/crops_sprite.jpg", sprite, [cv2.IMWRITE_JPEG_QUALITY, 80])
+    cv2.imwrite(f"{OUT_DIR}/crops_sprite.webp", sprite, [cv2.IMWRITE_WEBP_QUALITY, 92])
 
     # --- Data JSON (all coordinates in DISPLAY scale, pre-scaled here so
     #     the frontend never needs to know the original world size) ---
@@ -105,8 +112,8 @@ def main():
     with open(f"{OUT_DIR}/data.json", "w") as fp:
         json.dump(data, fp)
 
-    print(f"World image: {disp_w}x{disp_h} -> {OUT_DIR}/world.jpg")
-    print(f"Sprite sheet: {SPRITE_COLS}x{n_rows} cells of {CROP_THUMB_SIZE}px -> {OUT_DIR}/crops_sprite.jpg")
+    print(f"World image: {disp_w}x{disp_h} -> {OUT_DIR}/world.webp")
+    print(f"Sprite sheet: {SPRITE_COLS}x{n_rows} cells of {CROP_THUMB_SIZE}px -> {OUT_DIR}/crops_sprite.webp")
     print(f"Data JSON -> {OUT_DIR}/data.json "
           f"({os.path.getsize(f'{OUT_DIR}/data.json')/1024:.1f} KB)")
     print(f"VPS fixes: {len(result['vps_fix_frames'])}, "

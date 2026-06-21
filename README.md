@@ -41,6 +41,18 @@ without porting OpenCV to JS, so camera/odometry data comes from
 precomputed presets — but the fusion math itself, the part that's
 actually interesting to tune, is genuinely live.
 
+**Design pass:** minimal UI shell (no boxed panels, restrained accent
+color, generous whitespace) around deliberately sharp/rich content — the
+world map went from 1000px JPEG-85 to 1600px WebP-92 (tested PNG first:
+19MB combined, far too large; WebP got the same visual quality at ~2.8MB
+total), camera-feed crops are native resolution instead of downsampled
+thumbnails, and a targeting-reticle overlay was added to the feed. Real
+interactivity, not decoration: click the map or error chart to jump
+playback to that point, click a legend swatch to toggle a path's
+visibility, keyboard shortcuts (space, arrow keys), and a sandbox "ghost
+compare vs. default" overlay that shows a parameter's effect directly
+against a fixed reference rather than as an abstract number.
+
 ## Headline result
 
 On the standard scenario (200-frame loop, ±2° yaw, σ=1.5px noise, VPS fix every 10 frames):
