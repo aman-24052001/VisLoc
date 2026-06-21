@@ -2,7 +2,7 @@
 
 **Vision-based GPS-Denied Localization Simulator**
 
-Status: Draft v1 · Owner: Aman Kumar · Inspired by: ArduPilot GSoC 2024 / `ngps_flight` (Sanket Sharma)
+Status: Draft v1 · Inspired by: ArduPilot GSoC 2024 / `ngps_flight` (Sanket Sharma)
 
 ---
 
@@ -12,19 +12,18 @@ GPS-based positioning fails in jammed, spoofed, or signal-denied environments. U
 
 VisLoc is a scaled-down, fully simulated reproduction of this problem: it demonstrates how a moving camera can be localized against a known reference map (visual absolute positioning) and how that signal can be fused with noisy frame-to-frame motion estimates (visual odometry) to produce a stable, drift-corrected position estimate — without needing a real drone, GPU, or paid satellite imagery.
 
-This is a portfolio project, not a research contribution. The goal is to demonstrate computer vision + sensor fusion + systems-building competence in a self-contained, visually compelling, resume-defensible package.
+This is an educational reproduction, not a research contribution. The goal is a self-contained, visually compelling demonstration of the core concepts involved in GPS-denied visual navigation — feature-based absolute localization, optical-flow-based relative odometry, and Kalman/UKF sensor fusion.
 
 ---
 
-## 2. Why This Project
+## 2. Motivation
 
 | Reason | Detail |
 |---|---|
-| **Differentiation** | Most ML portfolios are LLM/RAG wrappers. A CV + sensor fusion project signals breadth — classical CV, filtering theory, and systems design in one piece. |
-| **Interview defensibility** | Every component (feature matching, optical flow, Kalman/UKF fusion) is something you can whiteboard-explain in an ML Engineer interview, unlike a black-box LLM call. |
-| **Reuses existing strengths** | You've already built BiLSTM timing predictors and worked with EKF-adjacent estimation at SanDisk (SwiftECO). This project is the public, demoable analog of that skill. |
-| **Zero infra cost** | No GPU, no drone, no paid imagery required (see Section 8). Removes the usual "but I needed expensive hardware" excuse from the narrative. |
-| **Quantifiable result** | Unlike many portfolio demos, this one produces a hard number — % drift reduction — which is a strong, concrete resume line. |
+| **Real-world relevance** | GPS denial (jamming, spoofing, signal blackout) is a genuine operational problem for UAVs and other autonomous platforms; visual localization is an active, well-studied mitigation. |
+| **Educational value** | Each component — feature matching, optical flow, Kalman/UKF fusion — is independently well-understood and explainable, making the combined system a good vehicle for learning estimation theory and classical computer vision together, rather than relying on an opaque end-to-end model. |
+| **Zero infrastructure cost** | No GPU, drone, or paid satellite imagery is required (see Section 10). The entire pipeline runs in simulation on commodity hardware. |
+| **Quantifiable outcome** | The project produces a concrete, measurable result — % position-drift reduction from fusion vs. raw odometry — rather than a purely qualitative demo. |
 
 ---
 
@@ -35,7 +34,7 @@ This is a portfolio project, not a research contribution. The goal is to demonst
 3. Estimate continuous relative motion via frame-to-frame tracking (optical flow).
 4. Fuse both signals via a Kalman/Unscented Kalman Filter with soft-correction (no instantaneous position snapping).
 5. Visualize and quantify: ground truth path vs. raw odometry-only path (drift) vs. fused path (corrected).
-6. Package as a clean, deployable, interactive web demo matching your existing portfolio design language.
+6. Package as a clean, deployable, interactive web demo with a coherent visual design.
 
 ## 4. Non-Goals
 
@@ -43,13 +42,13 @@ This is a portfolio project, not a research contribution. The goal is to demonst
 - No real-time onboard deployment or embedded optimization.
 - No transformer-based matcher (LightGlue/SuperPoint) in v1 — explicitly deferred to a v2 stretch goal.
 - No multi-reference-image stitching or wide-area mapping.
-- Not a claim of novel research — explicitly framed as an educational/portfolio reproduction.
+- Not a claim of novel research — explicitly framed as an educational reproduction.
 
 ---
 
 ## 5. Target Audience / Use Case
 
-- **Primary:** Recruiters/interviewers evaluating ML Engineer / Applied CV / Robotics-adjacent roles — this is a resume artifact + talking point.
+- **Primary:** Engineers, students, and hobbyists learning visual odometry and sensor fusion concepts who want a hands-on, runnable reference implementation.
 - **Secondary:** Anyone studying visual-inertial odometry or sensor fusion basics — the deployed demo should be self-explanatory enough to function as a teaching tool.
 
 ---
@@ -124,7 +123,7 @@ This is a portfolio project, not a research contribution. The goal is to demonst
 - Computes position error (Euclidean distance from ground truth) over time for two conditions:
   1. Raw odometry only (no fusion) — establishes the drift baseline
   2. Fused output — shows the correction
-- Reports: cumulative drift (final-frame error), mean error, and % error reduction (fused vs raw) — this is the headline resume number.
+- Reports: cumulative drift (final-frame error), mean error, and % error reduction (fused vs raw) — the project's headline benchmark number.
 - Exports a results table/CSV for reproducibility.
 
 ### 7.6 Dashboard / Visualizer
@@ -135,7 +134,7 @@ This is a portfolio project, not a research contribution. The goal is to demonst
 ## 8. UI / UX Design
 
 ### 8.1 Design Language
-Reuse your established system: JetBrains Mono (UI/data) + Fraunces serif (headers), dark background (`#060810`), gold accent (`#fbbf24`), no generic purple gradients, section nav dots, log-box style step animations — consistent with your existing portfolio pieces (SceneForge, RAGForge, mmr-retrieval-lab).
+Dark-theme, technical/data-product aesthetic: a monospace font for UI and data elements paired with a serif display font for headers, dark background, a single accent color used sparingly for emphasis and active states, minimal chrome, section navigation via anchor dots, and step-by-step animated reveals with log-style status output for pipeline stages. Avoid generic gradient-heavy "AI demo" styling.
 
 ### 8.2 Pages / Views
 
@@ -154,12 +153,12 @@ Reuse your established system: JetBrains Mono (UI/data) + Fraunces serif (header
 - **Playback controls:** play/pause, scrub bar, speed control
 
 **3. Parameter Sandbox**
-- Sliders/inputs (in your established interactive-demo style):
+- Sliders/inputs in the same interactive-demo style as the rest of the UI:
   - Noise injection level
   - Soft-correction frame count (`N`)
   - Absolute-fix rate (Hz)
   - Mahalanobis gate threshold (on/off + value)
-- Re-running with new parameters re-renders the path comparison and error chart live — this is the "show, don't tell" interactive centerpiece, same pattern as your MMR lambda-sweep demo.
+- Re-running with new parameters re-renders the path comparison and error chart live — a "show, don't tell" interactive centerpiece.
 
 **4. Results / Methodology**
 - Static write-up: architecture diagram (from Section 6), explanation of each module, final benchmark numbers, link back to the original ArduPilot project for attribution/inspiration.
@@ -173,14 +172,14 @@ The entire point of the UI is to make drift *visible* and correction *visible* �
 
 | Layer | Choice | Rationale |
 |---|---|---|
-| **Core CV** | OpenCV (Python) — ORB/AKAZE, optical flow, homography/RANSAC | Mature, no GPU required, directly comparable to real system's matching stage |
-| **Fusion math** | Custom UKF implementation (NumPy), or `filterpy` as a base to extend | Writing it (at least partially) by hand is more defensible in an interview than importing a black box |
-| **Simulation/backend** | Python (frame simulator, evaluation harness) | Matches your primary stack |
-| **API layer (if needed)** | FastAPI | Consistent with your other "Forge" projects; enables a backend if the dashboard needs live recomputation rather than precomputed playback |
-| **Frontend** | Vanilla JS/HTML/CSS or React (your call — vanilla fits your "zero dependency" projects like anushree-vastralaya; React fits if you want chart libraries) | Recharts/Chart.js for the error chart if React; otherwise Canvas/D3 for vanilla |
+| **Core CV** | OpenCV (Python) — ORB/AKAZE, optical flow, homography/RANSAC | Mature, no GPU required, directly comparable to the real system's matching stage |
+| **Fusion math** | Custom UKF implementation (NumPy), or `filterpy` as a base to extend | Writing the core filter by hand keeps the estimation logic transparent rather than hidden behind a library |
+| **Simulation/backend** | Python (frame simulator, evaluation harness) | Single language across the whole pipeline, minimal context-switching |
+| **API layer (if needed)** | FastAPI | Lightweight, enables a backend if the dashboard needs live recomputation rather than precomputed playback |
+| **Frontend** | Vanilla JS/HTML/CSS or React | Vanilla keeps the project dependency-free; React is preferable if richer chart libraries are wanted |
 | **Data** | One free aerial/satellite tile (Sentinel-2, ESRI World Imagery free tier, or any public high-res aerial photo) | No paid imagery required |
-| **Deployment** | GitHub Pages (static, precomputed playback) or Render free tier (if FastAPI backend needed for live parameter sandbox) | Matches your existing free-tier deployment pattern |
-| **Testing** | pytest for the CV/fusion modules | Matches your existing project standards (Talk-to-DB, SceneForge have test suites) |
+| **Deployment** | GitHub Pages (static, precomputed playback) or Render free tier (if FastAPI backend needed for live parameter sandbox) | Free-tier deployable end to end |
+| **Testing** | pytest for the CV/fusion modules | Ensures core matching and fusion logic is regression-tested as the system grows |
 
 **Recommended decision:** start with **precomputed playback + static GitHub Pages** for the Live Simulation View (cheapest, fastest to ship), and only stand up a FastAPI backend if the Parameter Sandbox needs true live recomputation rather than a few precomputed parameter presets.
 
@@ -198,10 +197,10 @@ The entire point of the UI is to make drift *visible* and correction *visible* �
 
 | Metric | Target |
 |---|---|
-| % drift reduction (fused vs. raw odometry) | Headline resume number — aim for a clearly demonstrable, non-trivial reduction (exact target depends on injected noise level chosen) |
+| % drift reduction (fused vs. raw odometry) | Headline benchmark number — aim for a clearly demonstrable, non-trivial reduction (exact target depends on injected noise level chosen) |
 | Demo load/playback smoothness | No visible UI lag during path animation |
-| Code quality | Test coverage on core modules (matcher, fusion), consistent with your other repos' testing standards |
-| Portfolio integration | Live deployed link + clean README, same bar as SceneForge/RAGForge |
+| Code quality | Test coverage on core modules (matcher, fusion) |
+| Deployment | Live deployed link + clean, reproducible README |
 
 ---
 
@@ -214,7 +213,7 @@ The entire point of the UI is to make drift *visible* and correction *visible* �
 | 3 | UKF fusion implemented — first "after" chart, headline metric computed |
 | 4 | Dashboard (Live Simulation View) built and wired to precomputed results |
 | 5 | Parameter Sandbox + Results/Methodology page |
-| 6 | README, deploy, portfolio/resume integration |
+| 6 | README, deploy, final polish |
 
 ---
 
@@ -230,7 +229,7 @@ The entire point of the UI is to make drift *visible* and correction *visible* �
 
 ## 14. Out of Scope / Future Work (v2+)
 
-- Swap ORB/AKAZE for LightGlue/SuperPoint (pretrained, no training needed) — legitimizes a "transformer-based feature matching" resume line
+- Swap ORB/AKAZE for LightGlue/SuperPoint (pretrained, no training needed) — a transformer-based feature matching upgrade path
 - Multi-reference-image support (tile stitching across a larger area)
 - Real video input (e.g. publicly available UAV footage) instead of purely synthetic frames
 
@@ -238,4 +237,4 @@ The entire point of the UI is to make drift *visible* and correction *visible* �
 
 ## 15. Attribution
 
-Explicitly inspired by and modeled on the architecture of `ngps_flight` / `ap_nongps` (Sanket Sharma, ArduPilot GSoC 2024 and follow-on work). VisLoc is an independent, simplified, simulation-only reproduction for learning/portfolio purposes — not a fork or derivative of that codebase. Credit to be stated clearly in the README.
+Explicitly inspired by and modeled on the architecture of `ngps_flight` / `ap_nongps` (Sanket Sharma, ArduPilot GSoC 2024 and follow-on work). VisLoc is an independent, simplified, simulation-only reproduction for learning purposes — not a fork or derivative of that codebase. Credit to be stated clearly in the README.
