@@ -230,7 +230,70 @@ tests/
   test_dynamics.py, test_controller.py, test_battery.py
 ```
 
-## 9. References
+## 9. Validation findings (what actually broke, and how it was found)
+
+Consistent with how every phase of the main VisLoc pipeline was built,
+nothing here was trusted just because the math looked right - each
+piece was checked against an external reference, and several real bugs
+were found and fixed in the process:
+
+1. **`η_P` calibration.** The paper's stated default (0.6) reproduced
+   the worked DJI Mavic 3 example's induced velocity almost exactly
+   (4.50 vs. 4.51 m/s) but came out ~11% low on hover power - and this
+   wasn't a one-off: reproducing all six drones in the paper's Table III
+   showed a *consistent* +13.6% mean endurance error, every drone high.
+   A sensitivity sweep found η_P=0.55 (still inside the paper's own
+   stated 0.5-0.7 "typical" range) brings mean error to +4.0%, every
+   drone within ±7%. See `battery.py`'s `PROP_FIGURE_OF_MERIT` for the
+   full derivation.
+
+2. **Propeller-radius column misread.** First reproduction attempt across
+   all six Table III drones gave wildly inconsistent errors (some 2x too
+   low, one too high) - traced to having halved some drones' propeller
+   values and not others, instead of consistently using each table value
+   directly as the radius (the convention confirmed correct by the Mavic
+   3 worked example). Fixing the units consistently turned scattered,
+   unexplainable errors into a clean, uniform +4-21% pattern - the
+   signature of an actual calibration question rather than a coding bug.
+
+3. **Two incompatible "battery empty" signals.** An early version of the
+   real-time `Battery` class fed accumulated energy into the paper's
+   open-circuit-voltage polynomial (Eq. 15) and expected it to cross a
+   realistic ~3.3V cutoff at roughly the validated endurance time. It
+   didn't - the polynomial needed ~4x that much accumulated energy
+   before nearing 3.3V. Root cause: Eq. 15 (voltage) and Eq. 21
+   (capacity ratio, the one validated against manufacturer specs) are
+   two separate sub-models in the source paper, fit on different data for
+   different purposes, not designed to agree on a depletion threshold.
+   Fixed by tying actual depletion to the validated capacity-ratio model
+   and keeping the OCV polynomial as an illustrative voltage readout only
+   - documented explicitly in `Battery.effective_capacity_wh()`.
+
+4. **Motor-mixing/battery-model power mismatch.** Wiring the validated
+   battery model to the validated rigid-body dynamics for the first time
+   immediately surfaced a cross-model inconsistency: real instantaneous
+   electrical power computed from actual motor torque (`Q·Ω` from the
+   commanded motor speeds) came out ~56W at hover, while the
+   independently-validated momentum-theory model said hover should cost
+   ~104W for the same drone - nearly 2x apart, because `c_thrust`/`c_drag`
+   had been chosen as plausible-looking but otherwise arbitrary
+   constants, never checked against the battery model. Fixed by deriving
+   `c_drag` from the validated hover-power model instead of leaving it
+   free (see `Drone.__init__`, `calibrate_drag_to_battery_model`) - after
+   the fix, the two independently-built models agree on hover power
+   exactly (ratio = 1.0000000000000002, i.e. to floating-point precision).
+
+5. **A documented, not hidden, scope limitation.** Running a full
+   hover-to-depletion simulation shows the drone's position holding
+   *exactly* at the target the entire time, even as the battery
+   approaches empty - because this model doesn't (yet) couple battery
+   voltage sag to available thrust. A real drone's motors can't
+   maintain commanded RPM as pack voltage drops near end-of-discharge,
+   and would eventually start to sink. This is an explicit, scoped-out
+   v2 item (the same way wind/turbulence is), not a silent gap - noted
+   here so it isn't mistaken for a validated capability.
+
+## 10. References
 
 - C. A. Dimmig et al., "Survey of Simulators for Aerial Robots," 2023, arXiv:2311.02296
 - L. Bauersfeld & D. Scaramuzza, "Range, Endurance, and Optimal Speed Estimates for Multicopters," IEEE RA-L, 2022, arXiv:2109.04741

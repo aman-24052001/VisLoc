@@ -82,3 +82,53 @@ def test_reset_clears_controller_integral_state():
         drone.step(target, 0.0, 0.005)
     drone.reset(0, 0, 5)
     assert all(pid._integral == 0.0 for pid in drone.controller.rate_pid)
+
+
+def test_hover_electrical_power_matches_validated_battery_model():
+    """Cross-model consistency check: the real motor-torque-based power
+    draw at hover (Q*Omega from actual commanded motor speeds) must match
+    the independently-validated momentum-theory hover power from
+    battery.py - found during development that these disagreed by
+    ~2x when c_drag was left as an arbitrary independent default;
+    Drone.__init__ now calibrates c_drag specifically to close this gap."""
+    from visloc3d.battery import hover_mechanical_power, motor_electrical_power
+    drone = Drone()
+    drone.reset(0, 0, 5)
+    target = np.array([0, 0, 5])
+    for _ in range(500):
+        drone.step(target, 0.0, 0.005)
+    p_theory = motor_electrical_power(hover_mechanical_power(drone.battery_spec))
+    assert np.isclose(drone.last_electrical_power_w, p_theory, rtol=1e-6)
+
+
+def test_battery_depletes_during_extended_hover_and_matches_estimate():
+    """Full integration: actually fly (hover) until the battery reports
+    depleted, and check the elapsed time matches the independently
+    computed hover-endurance estimate - not just that each piece works
+    in isolation, but that wiring them together preserves the validated
+    numbers."""
+    from visloc3d.battery import (
+        hover_mechanical_power, motor_electrical_power, per_cell_power,
+        effective_capacity_ratio, NOMINAL_CELL_VOLTAGE,
+    )
+    drone = Drone()
+    drone.reset(0, 0, 5)
+    target = np.array([0, 0, 5])
+    dt = 0.05
+    t = 0.0
+    while not drone.battery_depleted and t < 4000:
+        drone.step(target, 0.0, dt)
+        t += dt
+
+    spec = drone.battery_spec
+    p_mech_h = hover_mechanical_power(spec)
+    p_mot_h = motor_electrical_power(p_mech_h)
+    p_cell_h = per_cell_power(p_mot_h, spec)
+    kappa_h = effective_capacity_ratio(p_cell_h)
+    expected_s = kappa_h * spec.battery_capacity_ah * NOMINAL_CELL_VOLTAGE * spec.n_cells * 3600 / p_mot_h
+
+    assert abs(t - expected_s) / expected_s < 0.02
+    # and position must not have drifted even as the battery depleted -
+    # this sim doesn't (yet) model voltage-sag-induced thrust loss, an
+    # explicit, documented scope limitation rather than a silent gap.
+    assert np.allclose(drone.state.p, target, atol=1e-3)
