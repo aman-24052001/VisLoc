@@ -114,6 +114,37 @@
     font-size:11px;border-top:1px solid var(--line);}
   footer a{color:var(--text-dim);border-bottom:1px solid var(--line);}
 
+  /* --- Sandbox --- */
+  .sandbox-grid{display:grid;grid-template-columns:280px 1fr;gap:20px;margin-top:22px;}
+  @media (max-width:880px){.sandbox-grid{grid-template-columns:1fr;}}
+
+  .controls{display:flex;flex-direction:column;gap:18px;}
+  .preset-row{display:flex;gap:6px;}
+  .preset-btn{flex:1;background:var(--panel-2);border:1px solid var(--line);color:var(--text-dim);
+    font-family:inherit;font-size:11px;padding:8px 6px;border-radius:3px;cursor:pointer;
+    text-transform:uppercase;letter-spacing:.04em;transition:all .15s;}
+  .preset-btn.active{border-color:var(--amber);color:var(--amber);background:rgba(245,185,66,.08);}
+
+  .control-group{display:flex;flex-direction:column;gap:6px;}
+  .control-label{display:flex;justify-content:space-between;font-size:11px;color:var(--text-dim);
+    text-transform:uppercase;letter-spacing:.04em;}
+  .control-label .val{color:var(--amber);font-weight:600;}
+  .control-group input[type=range]{accent-color:#f5b942;width:100%;}
+  .control-hint{font-size:10.5px;color:var(--text-dim);opacity:.8;line-height:1.5;}
+
+  .toggle-row{display:flex;align-items:center;gap:8px;font-size:12px;}
+  .toggle-row input{accent-color:#f5b942;}
+
+  #resetBtn{margin-top:4px;background:transparent;border:1px solid var(--line);color:var(--text-dim);
+    font-family:inherit;font-size:11px;padding:8px;border-radius:3px;cursor:pointer;}
+  #resetBtn:hover{border-color:var(--text-dim);color:var(--text);}
+
+  .sandbox-stats{display:flex;gap:24px;margin-bottom:14px;flex-wrap:wrap;}
+  .sandbox-stats .stat .num{font-size:24px;}
+
+  #sandboxMapCanvas{width:100%;height:auto;border-radius:2px;display:block;}
+  #sandboxErrorChart{width:100%;height:110px;display:block;margin-top:14px;}
+
   @media (max-width:480px){
     header{padding:14px 16px;}
     .brand{font-size:12px;}
@@ -131,6 +162,7 @@
   <nav class="dots">
     <a href="#overview" class="nav-link active" data-target="overview"><span class="dot"></span>Overview</a>
     <a href="#simulation" class="nav-link" data-target="simulation"><span class="dot"></span>Simulation</a>
+    <a href="#sandbox" class="nav-link" data-target="sandbox"><span class="dot"></span>Sandbox</a>
     <a href="#results" class="nav-link" data-target="results"><span class="dot"></span>Results</a>
   </nav>
 </header>
@@ -191,6 +223,80 @@
   </div>
 </section>
 
+<section id="sandbox">
+  <h2 style="margin-bottom:6px;font-size:22px;">Parameter sandbox</h2>
+  <p style="color:var(--text-dim);font-size:13px;max-width:640px;margin-top:6px;">
+    Tune the fusion engine itself, live - this is the same UKF math as the
+    simulation above, ported to JavaScript and re-run on every change.
+    The camera/odometry data comes from a few precomputed noise presets
+    (re-running ORB matching and optical flow live in-browser isn't
+    feasible without porting OpenCV to JS) - switching presets swaps that
+    underlying data, while every slider below recomputes the actual filter
+    in real time.
+  </p>
+
+  <div class="sandbox-grid">
+    <div class="panel controls">
+      <div class="control-group">
+        <div class="control-label">Scenario preset</div>
+        <div class="preset-row">
+          <button class="preset-btn" data-preset="calm">Calm</button>
+          <button class="preset-btn active" data-preset="standard">Standard</button>
+          <button class="preset-btn" data-preset="turbulent">Turbulent</button>
+        </div>
+        <div class="control-hint">Noise/yaw level - swaps the precomputed camera data.</div>
+      </div>
+
+      <div class="control-group">
+        <div class="control-label"><span>Process noise (σ)</span><span class="val" id="valProcessNoise">2.5</span></div>
+        <input type="range" id="ctrlProcessNoise" min="0.5" max="10" step="0.5" value="2.5">
+        <div class="control-hint">How much the filter trusts its own constant-velocity prediction vs. incoming data. Higher lets it track a turning path faster.</div>
+      </div>
+
+      <div class="control-group">
+        <div class="control-label"><span>VPS fix rate</span><span class="val" id="valVpsRate">every 10 frames</span></div>
+        <input type="range" id="ctrlVpsRate" min="5" max="30" step="5" value="10">
+        <div class="control-hint">How often an absolute fix is attempted - lower is more frequent correction, but less realistic for a real 1-2Hz constraint.</div>
+      </div>
+
+      <div class="control-group">
+        <div class="control-label"><span>Soft-correction window</span><span class="val" id="valSoftFrames">10 frames</span></div>
+        <input type="range" id="ctrlSoftFrames" min="1" max="20" step="1" value="10">
+        <div class="control-hint">How many frames a VPS fix is spread over, instead of snapping instantly.</div>
+      </div>
+
+      <div class="control-group">
+        <div class="toggle-row">
+          <input type="checkbox" id="ctrlGateEnabled" checked>
+          <label for="ctrlGateEnabled">Mahalanobis gate</label>
+        </div>
+        <input type="range" id="ctrlGateThreshold" min="2" max="20" step="0.5" value="9.21">
+        <div class="control-label"><span>Threshold (χ²)</span><span class="val" id="valGateThreshold">9.21</span></div>
+        <div class="control-hint">Rejects a fix that's statistically too far from the current estimate. Disable to accept every fix unconditionally.</div>
+      </div>
+
+      <button id="resetBtn">Reset to defaults</button>
+    </div>
+
+    <div>
+      <div class="sandbox-stats">
+        <div class="stat"><span class="num" id="statFinal">–</span><span class="label">final drift reduction</span></div>
+        <div class="stat"><span class="num" id="statMean">–</span><span class="label">mean error reduction</span></div>
+        <div class="stat"><span class="num" id="statMax">–</span><span class="label">max error reduction</span></div>
+      </div>
+      <div class="panel" style="padding:10px;">
+        <canvas id="sandboxMapCanvas"></canvas>
+        <canvas id="sandboxErrorChart"></canvas>
+        <div class="legend" style="margin-top:8px;">
+          <span><i class="swatch" style="background:var(--white)"></i>ground truth</span>
+          <span><i class="swatch" style="background:var(--coral)"></i>raw odometry</span>
+          <span><i class="swatch" style="background:var(--amber)"></i>UKF fused</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
 <section id="results" class="results">
   <h2 style="margin-bottom:6px;font-size:22px;">Results</h2>
   <p>Standard scenario: 200-frame loop, ±2° camera yaw, σ=1.5px position
@@ -218,6 +324,7 @@
   &nbsp;·&nbsp; <a href="https://github.com/aman-24052001/VisLoc" target="_blank" rel="noopener">Source on GitHub</a>
 </footer>
 
+<script src="assets/sandbox.js"></script>
 <script>
 (async function(){
   const COLORS = { gt: '#f1f3f5', vio: '#e2574c', fused: '#f5b942' };
@@ -409,7 +516,7 @@
 
   // --- Nav active-state on scroll ---
   const links = document.querySelectorAll('.nav-link');
-  const targets = ['overview', 'simulation', 'results'].map(id => document.getElementById(id));
+  const targets = ['overview', 'simulation', 'sandbox', 'results'].map(id => document.getElementById(id));
   const obs = new IntersectionObserver(entries => {
     entries.forEach(e => {
       if (e.isIntersecting) {
@@ -418,6 +525,164 @@
     });
   }, { threshold: 0.5 });
   targets.forEach(t => obs.observe(t));
+})();
+</script>
+
+<script>
+(async function(){
+  const SCOLORS = { gt: '#f1f3f5', vio: '#e2574c', fused: '#f5b942' };
+
+  const sres = await fetch('assets/sandbox_data.json');
+  const sdata = await sres.json();
+  const SCALE = sdata.meta.scale; // raw world px -> display px, applied only here at render time
+
+  // Reuse the dashboard's world image - same world, same display size.
+  const sWorldImg = new Image();
+  await new Promise(r => { sWorldImg.onload = r; sWorldImg.src = 'assets/world.jpg'; });
+
+  const mapCanvas = document.getElementById('sandboxMapCanvas');
+  mapCanvas.width = sWorldImg.naturalWidth; mapCanvas.height = sWorldImg.naturalHeight;
+  const smctx = mapCanvas.getContext('2d');
+
+  const errCanvas = document.getElementById('sandboxErrorChart');
+  const dpr = window.devicePixelRatio || 1;
+  function sizeErrCanvas() {
+    const cssW = errCanvas.clientWidth || 280, cssH = 110;
+    errCanvas.width = cssW * dpr; errCanvas.height = cssH * dpr;
+    const ctx = errCanvas.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    return { ctx, cssW, cssH };
+  }
+
+  const DEFAULTS = {
+    preset: 'standard', processNoiseStd: 2.5, vpsRate: 10, softFrames: 10,
+    gateEnabled: true, gateThreshold: 9.21,
+  };
+  let state = Object.assign({}, DEFAULTS);
+
+  const els = {
+    presetBtns: document.querySelectorAll('.preset-btn'),
+    processNoise: document.getElementById('ctrlProcessNoise'),
+    vpsRate: document.getElementById('ctrlVpsRate'),
+    softFrames: document.getElementById('ctrlSoftFrames'),
+    gateEnabled: document.getElementById('ctrlGateEnabled'),
+    gateThreshold: document.getElementById('ctrlGateThreshold'),
+    valProcessNoise: document.getElementById('valProcessNoise'),
+    valVpsRate: document.getElementById('valVpsRate'),
+    valSoftFrames: document.getElementById('valSoftFrames'),
+    valGateThreshold: document.getElementById('valGateThreshold'),
+    statFinal: document.getElementById('statFinal'),
+    statMean: document.getElementById('statMean'),
+    statMax: document.getElementById('statMax'),
+    resetBtn: document.getElementById('resetBtn'),
+  };
+
+  function drawSandboxPath(ctx, pts, color, dash) {
+    ctx.save();
+    ctx.strokeStyle = color; ctx.lineWidth = 2.2; ctx.setLineDash(dash || []);
+    ctx.beginPath();
+    let started = false;
+    for (const p of pts) {
+      if (!p) continue;
+      const x = p[0] * SCALE, y = p[1] * SCALE;
+      if (!started) { ctx.moveTo(x, y); started = true; } else { ctx.lineTo(x, y); }
+    }
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function recompute() {
+    const dataset = sdata.presets[state.preset];
+    const cfg = {
+      processNoiseStd: state.processNoiseStd,
+      vioPosNoiseStd: 40.0, vioVelNoiseStd: 1.5, vpsNoiseStd: 4.0,
+      softFrames: state.softFrames,
+      chi2Threshold: state.gateEnabled ? state.gateThreshold : 0,
+      vpsRate: state.vpsRate,
+    };
+    const result = VisLocSandbox.runFusion(dataset, cfg);
+    const gt = dataset.gt_path;
+    const errFused = VisLocSandbox.errorSeries(result.fusedPath, gt);
+    const errVio = VisLocSandbox.errorSeries(result.vioGlobalPath, gt);
+
+    // --- map ---
+    smctx.clearRect(0, 0, mapCanvas.width, mapCanvas.height);
+    smctx.drawImage(sWorldImg, 0, 0, mapCanvas.width, mapCanvas.height);
+    drawSandboxPath(smctx, gt, SCOLORS.gt, []);
+    drawSandboxPath(smctx, result.vioGlobalPath, SCOLORS.vio, [7, 5]);
+    drawSandboxPath(smctx, result.fusedPath, SCOLORS.fused, [2, 4]);
+
+    // --- error chart ---
+    const { ctx: ectx, cssW, cssH } = sizeErrCanvas();
+    ectx.clearRect(0, 0, cssW, cssH);
+    const validVio = errVio.filter(v => v != null);
+    const validFused = errFused.filter(v => v != null);
+    const maxErr = Math.max(...validVio, ...validFused, 1) * 1.08;
+    const n = gt.length;
+    const padL = 4, padT = 6, padB = 6;
+    const plotW = cssW - padL - 4, plotH = cssH - padT - padB;
+    function drawSeries(arr, color) {
+      ectx.strokeStyle = color; ectx.lineWidth = 1.6; ectx.beginPath();
+      let started = false;
+      for (let i = 0; i < n; i++) {
+        if (arr[i] == null) continue;
+        const x = padL + (i / (n - 1)) * plotW;
+        const y = padT + plotH - (arr[i] / maxErr) * plotH;
+        if (!started) { ectx.moveTo(x, y); started = true; } else { ectx.lineTo(x, y); }
+      }
+      ectx.stroke();
+    }
+    drawSeries(errVio, SCOLORS.vio);
+    drawSeries(errFused, SCOLORS.fused);
+
+    // --- headline stats ---
+    function lastValid(arr) { for (let i = arr.length - 1; i >= 0; i--) if (arr[i] != null) return arr[i]; return null; }
+    const finalVio = lastValid(errVio), finalFused = lastValid(errFused);
+    const meanVio = validVio.reduce((a, b) => a + b, 0) / validVio.length;
+    const meanFused = validFused.reduce((a, b) => a + b, 0) / validFused.length;
+    const maxVio = Math.max(...validVio), maxFused = Math.max(...validFused);
+
+    function pct(raw, fused) { return raw > 0 ? (100 * (1 - fused / raw)).toFixed(1) + '%' : '–'; }
+    els.statFinal.textContent = pct(finalVio, finalFused);
+    els.statMean.textContent = pct(meanVio, meanFused);
+    els.statMax.textContent = pct(maxVio, maxFused);
+  }
+
+  function syncLabels() {
+    els.valProcessNoise.textContent = state.processNoiseStd.toFixed(1);
+    els.valVpsRate.textContent = 'every ' + state.vpsRate + ' frames';
+    els.valSoftFrames.textContent = state.softFrames + ' frames';
+    els.valGateThreshold.textContent = state.gateThreshold.toFixed(2);
+    els.gateThreshold.disabled = !state.gateEnabled;
+    els.gateThreshold.style.opacity = state.gateEnabled ? 1 : 0.4;
+  }
+
+  function applyStateToControls() {
+    els.processNoise.value = state.processNoiseStd;
+    els.vpsRate.value = state.vpsRate;
+    els.softFrames.value = state.softFrames;
+    els.gateEnabled.checked = state.gateEnabled;
+    els.gateThreshold.value = state.gateThreshold;
+    els.presetBtns.forEach(b => b.classList.toggle('active', b.dataset.preset === state.preset));
+    syncLabels();
+  }
+
+  els.presetBtns.forEach(btn => btn.addEventListener('click', () => {
+    state.preset = btn.dataset.preset;
+    applyStateToControls();
+    recompute();
+  }));
+  els.processNoise.addEventListener('input', e => { state.processNoiseStd = parseFloat(e.target.value); syncLabels(); recompute(); });
+  els.vpsRate.addEventListener('input', e => { state.vpsRate = parseInt(e.target.value, 10); syncLabels(); recompute(); });
+  els.softFrames.addEventListener('input', e => { state.softFrames = parseInt(e.target.value, 10); syncLabels(); recompute(); });
+  els.gateEnabled.addEventListener('change', e => { state.gateEnabled = e.target.checked; syncLabels(); recompute(); });
+  els.gateThreshold.addEventListener('input', e => { state.gateThreshold = parseFloat(e.target.value); syncLabels(); recompute(); });
+  els.resetBtn.addEventListener('click', () => { state = Object.assign({}, DEFAULTS); applyStateToControls(); recompute(); });
+
+  window.addEventListener('resize', recompute);
+
+  applyStateToControls();
+  recompute();
 })();
 </script>
 </body>

@@ -15,13 +15,13 @@ Inspired by [`ngps_flight`](https://github.com/snktshrma/ngps_flight) /
 GSoC 2024 and follow-on work). This is an independent, simulation-only
 reproduction for learning/portfolio purposes — not a fork of that codebase.
 
-## Status: Phase 4 of 6
+## Status: Phase 5 of 6
 
 - [x] **Phase 1** — Synthetic world generator + frame simulator + ORB-based absolute localizer
 - [x] **Phase 2** — Optical flow odometry + drift-only baseline
 - [x] **Phase 3** — UKF fusion
 - [x] **Phase 4** — Dashboard (live simulation view)
-- [ ] Phase 5 — Parameter sandbox
+- [x] **Phase 5** — Parameter sandbox
 - [ ] Phase 6 — Deploy + docs
 
 See [`PRD.md`](PRD.md) for the full design doc.
@@ -30,12 +30,16 @@ See [`PRD.md`](PRD.md) for the full design doc.
 
 **[aman-24052001.github.io/VisLoc](https://aman-24052001.github.io/VisLoc/)**
 
-Static, no backend — animated playback of the canonical scenario (ground
-truth vs. raw odometry vs. UKF-fused path), live camera-feed crop, a VPS
-lock indicator that fires on real fix frames with actual inlier-match
-counts, and a live error-over-time chart. All data is precomputed by
-`visloc/export_dashboard_data.py` and shipped as a ~13KB JSON file plus a
-sprite sheet of all 200 camera crops (one image, not 200 requests).
+Includes a **parameter sandbox**: the UKF fusion engine ported to
+JavaScript and run live, in the browser, on every slider change. Tune
+process noise, VPS fix rate, soft-correction window, and the Mahalanobis
+gate threshold/toggle, switch between three precomputed noise presets
+(Calm/Standard/Turbulent), and watch the path overlay, error chart, and
+headline drift-reduction stats recompute instantly. Re-running the actual
+CV pipeline (ORB matching, optical flow) live in-browser isn't feasible
+without porting OpenCV to JS, so camera/odometry data comes from
+precomputed presets — but the fusion math itself, the part that's
+actually interesting to tune, is genuinely live.
 
 ## Headline result
 
@@ -161,6 +165,52 @@ unfiltered rather than ship a fix that quietly breaks the common case. The
 real `ngps_flight` project this is modeled on has the same open gap, listed in
 its own TODO as "no fallback VO pipeline yet."
 
+## Engineering notes — Phase 5 (porting the UKF to JavaScript)
+
+**"UKF reduces to a linear KF for linear models" turned out to be false
+for this specific library.** Before writing any JS, I verified
+mathematically that since this project's process/measurement models are
+both linear, the UKF should be exactly equivalent to a plain linear
+Kalman filter — which would have let me port much simpler code. It
+wasn't: a from-scratch linear KF gave a ~8.6px different final position
+than the real `filterpy` UKF on identical inputs. Traced it to a specific
+implementation detail: filterpy computes the state/measurement
+cross-covariance (used for the Kalman gain) from sigma points generated
+*before* process noise Q is added, while the predicted covariance itself
+*includes* Q — an inconsistency inherent to the "additive noise" UKF
+formulation, not a bug, but one that means UKF-with-additive-Q does not
+mathematically collapse to a linear KF even when the model is linear.
+Confirmed by reading filterpy's actual source rather than guessing, then
+built a from-scratch Python reference implementation replicating that
+exact behavior (including a second subtlety: calling `update()` twice in
+one step, for the VIO observation and then the soft-correction, reuses
+the *same* sigma points from the preceding `predict()` rather than
+regenerating them — also intentional in filterpy, also replicated
+deliberately) and validated it bit-for-bit against the real filter before
+porting anything to JS.
+
+**A scale/parameter mismatch silently distorted the Mahalanobis gate.**
+After porting, three of three default-ish configs matched the Python
+reference to sub-pixel precision — but one config (a stricter gate
+threshold) was off by ~4px. The path/position data had been pre-scaled
+for display, but the noise parameters (`vpsNoiseStd`, `processNoiseStd`,
+etc.) hadn't been — so the innovation in the gate's Mahalanobis distance
+was scaled while the covariance it's compared against wasn't, distorting
+`d²` by exactly `scale²`. This barely affected the *position estimate*
+(direct-position Kalman gains are close to 1 regardless), which is why it
+took a deliberately-stricter config to even notice — but it flipped
+accept/reject decisions at the gate boundary, which then cascaded. Fixed
+by keeping the fusion math entirely in raw/unscaled coordinates (matching
+Python exactly) and applying the display scale only at canvas render
+time, never inside the filter.
+
+**Numerical stabilization needed porting too, not just the filter math.**
+The JS port includes a from-scratch cyclic Jacobi eigenvalue solver
+specifically to replicate the eigenvalue-clipping stabilizer from Phase 3.
+Without it, the same P-matrix instability that crashed the Python filter
+under aggressive tuning would crash the in-browser sandbox the moment
+someone dragged a slider too far.
+
 ## Try it
 
 ```bash
@@ -172,5 +222,6 @@ python -m visloc.odometry         # runs raw odometry tracking, prints drift sta
 python -m visloc.evaluate_drift   # generates the Phase 2 baseline charts
 python -m visloc.evaluate_fusion  # generates the Phase 3 fusion comparison charts
 python -m visloc.export_dashboard_data  # generates docs/assets/* for the dashboard
+python -m visloc.export_sandbox_data    # generates docs/assets/sandbox_data.json
 pytest tests/ -v
 ```
