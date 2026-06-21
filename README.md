@@ -15,14 +15,14 @@ Inspired by [`ngps_flight`](https://github.com/snktshrma/ngps_flight) /
 GSoC 2024 and follow-on work). This is an independent, simulation-only
 reproduction for learning/portfolio purposes — not a fork of that codebase.
 
-## Status: Phase 5 of 6
+## Status: Complete (6 of 6)
 
 - [x] **Phase 1** — Synthetic world generator + frame simulator + ORB-based absolute localizer
 - [x] **Phase 2** — Optical flow odometry + drift-only baseline
 - [x] **Phase 3** — UKF fusion
 - [x] **Phase 4** — Dashboard (live simulation view)
 - [x] **Phase 5** — Parameter sandbox
-- [ ] Phase 6 — Deploy + docs
+- [x] **Phase 6** — Deploy + docs
 
 See [`PRD.md`](PRD.md) for the full design doc.
 
@@ -225,3 +225,27 @@ python -m visloc.export_dashboard_data  # generates docs/assets/* for the dashbo
 python -m visloc.export_sandbox_data    # generates docs/assets/sandbox_data.json
 pytest tests/ -v
 ```
+
+## Project structure
+
+```
+visloc/
+  world.py                  Synthetic aerial reference map generator
+  simulator.py               Flight path + camera-crop simulator
+  localizer.py                ORB/AKAZE absolute localizer
+  odometry.py                 Lucas-Kanade relative odometry
+  fusion.py                   UKF fusion engine (VIO + VPS)
+  evaluate_drift.py            Phase 2 baseline chart generator
+  evaluate_fusion.py            Phase 3 comparison chart generator
+  export_dashboard_data.py       Precomputes docs/assets/* for the dashboard
+  export_sandbox_data.py          Precomputes docs/assets/sandbox_data.json
+tests/                        pytest suite (28 tests across all modules)
+docs/                          Static site (GitHub Pages) - dashboard + sandbox
+  assets/sandbox.js              JS port of the UKF, validated against Python
+PRD.md                         Original design doc
+```
+
+## License
+
+MIT — see [`LICENSE`](LICENSE). Inspired by `ngps_flight`/`ap_nongps`
+(Sanket Sharma); this is an independent reproduction, not a fork.
