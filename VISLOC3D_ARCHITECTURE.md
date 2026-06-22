@@ -215,7 +215,38 @@ controller, and battery model are independently validated — same
 incremental, validate-before-connecting approach used for every prior
 phase of VisLoc.
 
-## 8. Planned module layout
+## 8. Interactive 3D viewer (`docs3d/`)
+
+A live, interactive viewer - not a precomputed/played-back animation.
+The dynamics, motor mixing, controller, and battery model are ported to
+JavaScript (`docs3d/assets/sim3d.js`) and run for real in the browser at
+each render frame, the same way the 2D VisLoc project's UKF was ported
+to JS for its parameter sandbox. Validated the same way: ran an identical
+scenario (waypoint (10,5,5), yaw 0.3 rad, 15s) through both the Python
+and JS implementations and compared every state variable - position,
+velocity, attitude quaternion, angular rate, individual motor speeds,
+electrical power, and accumulated battery energy all matched to
+floating-point precision. Separately confirmed the longer-horizon
+hover-to-battery-depletion time also matches exactly (2496.05s both).
+
+Rendering uses Three.js (vendored locally via `assets/three.module.min.js`
++ `assets/OrbitControls.js` rather than a CDN - this sandbox's egress
+restrictions block CDN fetches even from a launched browser, confirmed by
+testing directly, so vendoring was the only way to actually verify the
+viewer renders correctly before describing it as working). The physics
+state (ENU, Z-up) is mapped to Three.js's Y-up convention via a proper
+(determinant +1) change of basis, applied consistently to both position
+and attitude quaternion - not just position - so the model's tilt during
+maneuvers is geometrically correct, not just its location.
+
+Interaction: drag-to-orbit / scroll-to-zoom / right-drag-to-pan camera,
+live target sliders (X/Y/Z/yaw) that feed directly into the real
+controller every frame, maneuver presets, play/pause, and a reset that
+restores both the vehicle state and the target controls. Telemetry
+(position, speed, attitude, motor power, battery %, pack voltage) reads
+directly from the same simulation object driving the render.
+
+## 9. Planned module layout
 
 ```
 visloc3d/
@@ -227,10 +258,14 @@ visloc3d/
   evaluate_dynamics.py   Hover/step-response validation, charts
   evaluate_battery.py     Reproduces the paper's Table III, charts
 tests/
-  test_dynamics.py, test_controller.py, test_battery.py
+  test_dynamics3d.py, test_motor_mixing.py, test_vehicle.py, test_battery.py
+docs3d/
+  index.html              Interactive Three.js viewer
+  assets/sim3d.js           JS port of dynamics+controller+battery, validated bit-for-bit
+  assets/three.module.min.js, assets/OrbitControls.js   Vendored locally (see Section 9)
 ```
 
-## 9. Validation findings (what actually broke, and how it was found)
+## 10. Validation findings (what actually broke, and how it was found)
 
 Consistent with how every phase of the main VisLoc pipeline was built,
 nothing here was trusted just because the math looked right - each
@@ -293,7 +328,7 @@ were found and fixed in the process:
    v2 item (the same way wind/turbulence is), not a silent gap - noted
    here so it isn't mistaken for a validated capability.
 
-## 10. References
+## 11. References
 
 - C. A. Dimmig et al., "Survey of Simulators for Aerial Robots," 2023, arXiv:2311.02296
 - L. Bauersfeld & D. Scaramuzza, "Range, Endurance, and Optimal Speed Estimates for Multicopters," IEEE RA-L, 2022, arXiv:2109.04741

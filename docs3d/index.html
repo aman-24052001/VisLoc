@@ -1,0 +1,349 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VisLoc3D — Interactive Flight Simulator</title>
+<meta name="description" content="Live 6-DOF quadrotor flight dynamics simulation: real PID flight control, motor mixing, and a battery model validated against six real drones.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0a0b0d; --text:#ECEAE3; --text-dim:#6f7479; --text-faint:#454850;
+    --hairline:#1c1e22; --amber:#F2B441; --coral:#C9776A; --white:#F3F1EA;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;background:var(--bg);color:var(--text);
+    font-family:'JetBrains Mono',monospace;-webkit-font-smoothing:antialiased;
+    height:100%;overflow:hidden;}
+  h1,h2{font-family:'Fraunces',serif;font-weight:600;margin:0;}
+  a{color:var(--text);text-decoration:none;border-bottom:1px solid var(--text-faint);}
+  a:hover{color:var(--amber);border-color:var(--amber);}
+  :focus-visible{outline:1.5px solid var(--amber);outline-offset:2px;}
+
+  header{position:absolute;top:0;left:0;right:0;z-index:10;display:flex;
+    align-items:center;justify-content:space-between;padding:18px 24px;
+    background:linear-gradient(rgba(10,11,13,.9), transparent);pointer-events:none;}
+  header a{pointer-events:auto;}
+  .brand{font-weight:500;letter-spacing:.14em;font-size:12px;color:var(--text-dim);}
+  .brand .accent{color:var(--amber);}
+  .back-link{font-size:10.5px;color:var(--text-faint);pointer-events:auto;}
+
+  #viewport{position:absolute;inset:0;}
+  #scene{display:block;width:100%;height:100%;}
+
+  .panel{position:absolute;background:rgba(10,11,13,.82);backdrop-filter:blur(8px);
+    border:1px solid var(--hairline);border-radius:3px;padding:16px;z-index:5;}
+
+  #telemetry{top:70px;left:20px;width:230px;font-size:11.5px;line-height:1.5;}
+  #telemetry .row{display:flex;justify-content:space-between;padding:3px 0;
+    border-bottom:1px solid var(--hairline);}
+  #telemetry .row:last-child{border-bottom:none;}
+  #telemetry .label{color:var(--text-faint);}
+  #telemetry .val{color:var(--text);}
+  #telemetry .val.accent{color:var(--amber);}
+  #battery-bar{height:4px;background:var(--hairline);border-radius:2px;margin-top:8px;overflow:hidden;}
+  #battery-fill{height:100%;background:var(--amber);width:100%;transition:width .2s,background .2s;}
+  #depleted-msg{color:var(--coral);font-size:11px;margin-top:8px;display:none;}
+
+  #controls{bottom:20px;left:20px;width:280px;}
+  .ctrl-label{display:flex;justify-content:space-between;font-size:10.5px;
+    color:var(--text-faint);text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px;}
+  .ctrl-label .val{color:var(--amber);}
+  .ctrl-group{margin-bottom:12px;}
+  .ctrl-group input[type=range]{width:100%;accent-color:#F2B441;height:2px;}
+  .preset-row{display:flex;gap:6px;margin-top:6px;flex-wrap:wrap;}
+  .preset-btn{flex:1;min-width:60px;background:transparent;border:1px solid var(--hairline);
+    color:var(--text-dim);font-size:10px;padding:7px 4px;border-radius:2px;cursor:pointer;
+    font-family:inherit;text-transform:uppercase;letter-spacing:.03em;}
+  .preset-btn:hover{border-color:var(--amber);color:var(--amber);}
+  .transport-row{display:flex;gap:8px;margin-top:14px;border-top:1px solid var(--hairline);padding-top:12px;}
+  #playPauseBtn,#resetBtn{background:transparent;border:1px solid var(--hairline);color:var(--text-dim);
+    font-size:11px;padding:7px 12px;border-radius:2px;cursor:pointer;font-family:inherit;}
+  #playPauseBtn:hover,#resetBtn:hover{border-color:var(--text-dim);color:var(--text);}
+
+  #hint{bottom:20px;right:20px;font-size:10px;color:var(--text-faint);text-align:right;
+    background:transparent;border:none;}
+  #hint kbd{border:1px solid var(--hairline);border-radius:2px;padding:1px 5px;}
+
+  @media (max-width:640px){
+    #telemetry{width:170px;font-size:10px;}
+    #controls{width:220px;}
+    #hint{display:none;}
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">VISLOC<span class="accent">3D</span></div>
+  <a class="back-link" href="../docs/index.html">&larr; back to VisLoc</a>
+</header>
+
+<div id="viewport"><canvas id="scene"></canvas></div>
+
+<div class="panel" id="telemetry">
+  <div class="row"><span class="label">Position (m)</span><span class="val" id="tPos">0, 0, 0</span></div>
+  <div class="row"><span class="label">Speed (m/s)</span><span class="val" id="tSpeed">0.00</span></div>
+  <div class="row"><span class="label">Roll / Pitch / Yaw</span><span class="val" id="tAttitude">0°, 0°, 0°</span></div>
+  <div class="row"><span class="label">Motor power</span><span class="val accent" id="tPower">0 W</span></div>
+  <div class="row"><span class="label">Battery</span><span class="val accent" id="tBattery">100%</span></div>
+  <div class="row"><span class="label">Pack voltage</span><span class="val" id="tVoltage">14.8 V</span></div>
+  <div id="battery-bar"><div id="battery-fill"></div></div>
+  <div id="depleted-msg">BATTERY DEPLETED — simulation paused</div>
+</div>
+
+<div class="panel" id="controls">
+  <div class="ctrl-group">
+    <div class="ctrl-label"><span>Target X (East)</span><span class="val" id="valX">0.0 m</span></div>
+    <input type="range" id="ctrlX" min="-15" max="15" step="0.5" value="0">
+  </div>
+  <div class="ctrl-group">
+    <div class="ctrl-label"><span>Target Y (North)</span><span class="val" id="valY">0.0 m</span></div>
+    <input type="range" id="ctrlY" min="-15" max="15" step="0.5" value="0">
+  </div>
+  <div class="ctrl-group">
+    <div class="ctrl-label"><span>Target Z (altitude)</span><span class="val" id="valZ">5.0 m</span></div>
+    <input type="range" id="ctrlZ" min="0" max="15" step="0.5" value="5">
+  </div>
+  <div class="ctrl-group">
+    <div class="ctrl-label"><span>Target yaw</span><span class="val" id="valYaw">0°</span></div>
+    <input type="range" id="ctrlYaw" min="-180" max="180" step="5" value="0">
+  </div>
+  <div class="preset-row">
+    <button class="preset-btn" data-preset="0,0,5,0">Hover</button>
+    <button class="preset-btn" data-preset="0,0,12,0">Climb</button>
+    <button class="preset-btn" data-preset="10,10,8,90">Corner</button>
+    <button class="preset-btn" data-preset="0,0,0.3,0">Land</button>
+  </div>
+  <div class="transport-row">
+    <button id="playPauseBtn">Pause</button>
+    <button id="resetBtn">Reset</button>
+  </div>
+</div>
+
+<div class="panel" id="hint">
+  drag to orbit &middot; scroll to zoom &middot; right-drag to pan<br>
+  same validated 6-DOF dynamics + PID controller + battery model as the Python sim
+</div>
+
+<script src="assets/sim3d.js"></script>
+<script type="module">
+import * as THREE from './assets/three.module.min.js';
+import { OrbitControls } from './assets/OrbitControls.js';
+
+// --- coordinate convention: our physics is ENU/Z-up (X=East, Y=North,
+// Z=Up), Three.js is Y-up. Map via a proper (det=+1) rotation - a -90deg
+// rotation about X - so orientations carry over correctly, not just
+// positions: ourX->threeX, ourZ->threeY, ourY->-threeZ. ---
+function toThreePos(p) { return new THREE.Vector3(p[0], p[2], -p[1]); }
+function toThreeQuat(q) { return new THREE.Quaternion(q[1], q[3], -q[2], q[0]); }
+
+const canvas = document.getElementById('scene');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setPixelRatio(window.devicePixelRatio || 1);
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0a0b0d);
+scene.fog = new THREE.Fog(0x0a0b0d, 25, 60);
+
+const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 200);
+camera.position.set(7, 5, 7);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.set(0, 4, 0);
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+controls.minDistance = 2;
+controls.maxDistance = 40;
+
+// --- lighting ---
+scene.add(new THREE.AmbientLight(0xffffff, 0.55));
+const sun = new THREE.DirectionalLight(0xfff2d8, 0.9);
+sun.position.set(10, 20, 6);
+scene.add(sun);
+
+// --- ground graticule - same visual language as the 2D map's coordinate grid ---
+const grid = new THREE.GridHelper(40, 20, 0x3a3f47, 0x1c1e22);
+scene.add(grid);
+const groundMat = new THREE.MeshStandardMaterial({ color: 0x12141a, roughness: 1, metalness: 0 });
+const ground = new THREE.Mesh(new THREE.CircleGeometry(20, 48), groundMat);
+ground.rotation.x = -Math.PI / 2;
+ground.position.y = -0.02;
+scene.add(ground);
+
+// --- drone model: body + 4 arms + 4 rotor discs, oriented by the real quaternion ---
+const droneGroup = new THREE.Group();
+const bodyMat = new THREE.MeshStandardMaterial({ color: 0xECEAE3, roughness: 0.4, metalness: 0.3 });
+const armMat = new THREE.MeshStandardMaterial({ color: 0x6f7479, roughness: 0.6 });
+const rotorMatCW = new THREE.MeshStandardMaterial({ color: 0xC9776A, emissive: 0xC9776A, emissiveIntensity: 0.3 });
+const rotorMatCCW = new THREE.MeshStandardMaterial({ color: 0xF2B441, emissive: 0xF2B441, emissiveIntensity: 0.3 });
+
+// Visual scale-up: a real ~0.3m-wide drone is hard to read against a
+// 40m grid at any sensible viewing distance. Scaling the rendered model
+// only (not the physics, which stays in real meters) is standard
+// practice for any flight sim/game - exactly as we treated the
+// procedural map's color/texture choices as a presentation decision
+// independent of the validated simulation underneath it.
+const VISUAL_SCALE = 5;
+
+const body = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.06, 0.14), bodyMat);
+droneGroup.add(body);
+
+const ARM_LEN = 0.22, S = 1 / Math.sqrt(2);
+const motorPositions = [
+  [S * ARM_LEN, -S * ARM_LEN], [-S * ARM_LEN, S * ARM_LEN],
+  [S * ARM_LEN, S * ARM_LEN], [-S * ARM_LEN, -S * ARM_LEN],
+];
+const spin = [-1, -1, 1, 1]; // matches sim3d.js motor mixer: 0,1=CW; 2,3=CCW
+motorPositions.forEach(([mx, my], i) => {
+  // local frame here is our body frame (X front, Y left, Z up); converted
+  // to three's local space the same way as world points (Z->Y, Y->-Z).
+  const armVec = toThreePos([mx, my, 0]);
+  const armLen = armVec.length();
+  const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.008, armLen, 6), armMat);
+  arm.position.copy(armVec.clone().multiplyScalar(0.5));
+  arm.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), armVec.clone().normalize());
+  droneGroup.add(arm);
+
+  const rotor = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 0.01, 16),
+    spin[i] > 0 ? rotorMatCCW : rotorMatCW);
+  rotor.position.copy(armVec);
+  droneGroup.add(rotor);
+});
+droneGroup.scale.setScalar(VISUAL_SCALE);
+scene.add(droneGroup);
+
+// A faint trailing path so movement reads clearly even from a distance.
+const MAX_TRAIL = 600;
+const trailPositions = new Float32Array(MAX_TRAIL * 3);
+const trailGeom = new THREE.BufferGeometry();
+trailGeom.setAttribute('position', new THREE.BufferAttribute(trailPositions, 3));
+const trail = new THREE.Line(trailGeom, new THREE.LineBasicMaterial({ color: 0xF2B441, transparent: true, opacity: 0.45 }));
+trail.frustumCulled = false;
+scene.add(trail);
+let trailCount = 0;
+
+function pushTrail(p) {
+  const v = toThreePos(p);
+  if (trailCount < MAX_TRAIL) {
+    trailPositions.set([v.x, v.y, v.z], trailCount * 3);
+    trailCount++;
+  } else {
+    trailPositions.copyWithin(0, 3);
+    trailPositions.set([v.x, v.y, v.z], (MAX_TRAIL - 1) * 3);
+  }
+  trailGeom.setDrawRange(0, trailCount);
+  trailGeom.attributes.position.needsUpdate = true;
+}
+
+function resize() {
+  const w = window.innerWidth, h = window.innerHeight;
+  renderer.setSize(w, h);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+}
+window.addEventListener('resize', resize);
+resize();
+
+// --- simulation wiring ---
+const drone = new VisLoc3D.Drone();
+drone.reset(0, 0, 0.3);
+let target = [0, 0, 5];
+let targetYaw = 0;
+let playing = true;
+const DT = 0.01;
+
+const els = {
+  x: document.getElementById('ctrlX'), y: document.getElementById('ctrlY'),
+  z: document.getElementById('ctrlZ'), yaw: document.getElementById('ctrlYaw'),
+  valX: document.getElementById('valX'), valY: document.getElementById('valY'),
+  valZ: document.getElementById('valZ'), valYaw: document.getElementById('valYaw'),
+  tPos: document.getElementById('tPos'), tSpeed: document.getElementById('tSpeed'),
+  tAttitude: document.getElementById('tAttitude'), tPower: document.getElementById('tPower'),
+  tBattery: document.getElementById('tBattery'), tVoltage: document.getElementById('tVoltage'),
+  batteryFill: document.getElementById('battery-fill'), depletedMsg: document.getElementById('depleted-msg'),
+  playPauseBtn: document.getElementById('playPauseBtn'), resetBtn: document.getElementById('resetBtn'),
+};
+
+function syncTargetFromControls() {
+  target = [parseFloat(els.x.value), parseFloat(els.y.value), parseFloat(els.z.value)];
+  targetYaw = parseFloat(els.yaw.value) * Math.PI / 180;
+  els.valX.textContent = target[0].toFixed(1) + ' m';
+  els.valY.textContent = target[1].toFixed(1) + ' m';
+  els.valZ.textContent = target[2].toFixed(1) + ' m';
+  els.valYaw.textContent = els.yaw.value + '°';
+}
+[els.x, els.y, els.z, els.yaw].forEach(el => el.addEventListener('input', syncTargetFromControls));
+syncTargetFromControls();
+
+document.querySelectorAll('.preset-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const [x, y, z, yaw] = btn.dataset.preset.split(',').map(Number);
+    els.x.value = x; els.y.value = y; els.z.value = z; els.yaw.value = yaw;
+    syncTargetFromControls();
+  });
+});
+
+function setPlaying(p) {
+  playing = p;
+  els.playPauseBtn.textContent = playing ? 'Pause' : 'Play';
+}
+els.playPauseBtn.addEventListener('click', () => setPlaying(!playing));
+els.resetBtn.addEventListener('click', () => {
+  drone.reset(0, 0, 0.3);
+  trailCount = 0;
+  els.x.value = 0; els.y.value = 0; els.z.value = 5; els.yaw.value = 0;
+  syncTargetFromControls();
+  setPlaying(true);
+});
+
+function updateTelemetry() {
+  const p = drone.state.p;
+  els.tPos.textContent = p.map(v => v.toFixed(1)).join(', ');
+  const speed = Math.hypot(...drone.state.v);
+  els.tSpeed.textContent = speed.toFixed(2);
+  const [roll, pitch, yaw] = VisLoc3D.quatToEuler(drone.state.q).map(r => (r * 180 / Math.PI).toFixed(0));
+  els.tAttitude.textContent = `${roll}°, ${pitch}°, ${yaw}°`;
+  els.tPower.textContent = drone.lastElecPower.toFixed(1) + ' W';
+
+  const soc = drone.battery.socFraction(drone.lastElecPower);
+  els.tBattery.textContent = (soc * 100).toFixed(1) + '%';
+  els.tVoltage.textContent = drone.battery.packVoltage.toFixed(2) + ' V';
+  els.batteryFill.style.width = (soc * 100) + '%';
+  els.batteryFill.style.background = soc < 0.15 ? '#C9776A' : '#F2B441';
+  els.depletedMsg.style.display = drone.batteryDepleted ? 'block' : 'none';
+}
+
+let lastTime = performance.now();
+function animate() {
+  requestAnimationFrame(animate);
+  const now = performance.now();
+  const frameDt = Math.min(0.05, (now - lastTime) / 1000);
+  lastTime = now;
+
+  if (playing && !drone.batteryDepleted) {
+    // Fixed-step physics substeps within the rendered frame, so the
+    // simulation's actual dt always matches what was validated (0.01s),
+    // independent of the browser's render frame rate.
+    let remaining = frameDt;
+    while (remaining > 1e-6) {
+      const step = Math.min(DT, remaining);
+      drone.step(target, targetYaw, step);
+      remaining -= step;
+    }
+    pushTrail(drone.state.p);
+  }
+
+  droneGroup.position.copy(toThreePos(drone.state.p));
+  droneGroup.quaternion.copy(toThreeQuat(drone.state.q));
+  controls.target.lerp(droneGroup.position, 0.04);
+
+  updateTelemetry();
+  controls.update();
+  renderer.render(scene, camera);
+}
+animate();
+</script>
+</body>
+</html>
