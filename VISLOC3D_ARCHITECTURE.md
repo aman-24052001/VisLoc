@@ -198,22 +198,52 @@ band, not just "some plausible number."
   branch's synthetic world), now sampled via a real 3D projection from
   the drone's actual altitude/attitude instead of a fixed-size crop.
 
-## 7. Integration point with the existing VisLoc pipeline
+## 7. Integration with the existing VisLoc pipeline (implemented)
 
-The existing `visloc/simulator.py` (`FrameSimulator`) currently extracts
-a fixed-size, axis-aligned crop from the world map at each scripted
-waypoint. In this extension, the crop becomes a real perspective
-projection: crop size and position depend on the drone's actual altitude
-(higher = larger ground footprint, matching a real camera's field of
-view) and attitude (roll/pitch tilt the projected footprint into a
-trapezoid, not a square — corrected or left as a modeling limitation to
-be explicit about, matching how earlier phases documented known
-limitations rather than hiding them).
+`visloc3d/camera.py` replaces `FrameSimulator`'s scripted, always-axis-
+aligned crop with a real perspective projection: imaging a flat ground
+plane from any camera pose is *exactly* a homography (Hartley &
+Zisserman, ch. 8), so altitude and attitude both fall out of one 3x3
+matrix derived from the drone's real pose, not separate ad hoc effects.
 
-This is deliberately the *last* integration step, after the dynamics,
-controller, and battery model are independently validated — same
-incremental, validate-before-connecting approach used for every prior
-phase of VisLoc.
+**Validated against the original 2D pipeline**, not just trusted because
+the math looked right: footprint corners match the old fixed-size crop's
+coverage to <0.001px at a calibrated reference altitude; raw pixel
+comparison against the old crop showed a misleadingly large 7.7/255 mean
+difference at first, traced to the world map's per-pixel speckle noise
+decorrelating under bilinear resampling (confirmed by blurring both
+images to average out that noise, which dropped the difference to
+1.8/255) rather than any geometric error. Footprint size scales exactly
+linearly with altitude; tilt produces a genuine, correctly-shaped
+trapezoid (asymmetric near/far edges), not an approximation.
+
+**A real camera-mounting bug found and fixed along the way:** the first
+choice of body-to-camera rotation produced an image where motion along
+world Y mapped to image *column* rather than row — confirmed analytically
+(not just empirically) that a right-handed, downward-looking camera frame
+cannot simultaneously have image-right tied to +X *and* image-down tied
+to +Y without a flip somewhere — the same reason a top-down map view and
+a looking-up-at-the-sky view have opposite handedness for the same
+compass directions. Fixed by choosing image-right = body-front and
+applying one deterministic vertical flip, documented in `camera.py`
+rather than hidden inside a "clever" rotation choice.
+
+**The most interesting finding: feeding tilted frames through the
+existing (Phase 1) ORB localizer.** Position error grew from 1.2px level
+to 116px at 30° tilt, inliers dropping from 133 to 21 — which looked at
+first like the well-known ORB/SIFT viewpoint-invariance limitation
+(neither is invariant to large perspective skew, only modest
+rotation/scale). It's partly that, but checking with the *exact*
+ground-truth homography (no feature matching at all) revealed the
+dominant effect is purely geometric: a tilted rigid camera's image
+center looks at a ground point shifted from the drone's actual (x, y) by
+`altitude * tan(tilt)` — confirmed to <1% accuracy analytically. This is
+precisely *why* the original ArduPilot project requires a gimbal-
+stabilized camera — this work independently rediscovered and quantified
+that requirement from first principles rather than just citing it. A
+rigid-mount localizer wanting true drone position (not "where the camera
+is pointing") would need to know/estimate attitude and subtract this
+offset explicitly — a documented, scoped-out follow-on, not fixed here.
 
 ## 8. Interactive 3D viewer (`docs3d/`)
 
@@ -254,6 +284,7 @@ visloc3d/
   motor_mixing.py    Force/torque allocation matrices, "+"-config quadrotor
   controller.py       Cascaded PID (position -> attitude -> rate -> mixing)
   battery.py           Hover power, motor efficiency, OTC battery voltage model
+  camera.py             Ground-plane homography projection (altitude + tilt)
   vehicle.py            Top-level Drone class wiring dynamics+controller+battery
   evaluate_dynamics.py   Hover/step-response validation, charts
   evaluate_battery.py     Reproduces the paper's Table III, charts
