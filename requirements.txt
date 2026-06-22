@@ -3,3 +3,6 @@ opencv-python-headless>=4.9
 filterpy>=1.4.5
 matplotlib>=3.8
 pytest>=8.0
+fastapi>=0.115
+uvicorn[standard]>=0.30
+httpx>=0.27

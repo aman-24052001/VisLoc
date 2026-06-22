@@ -1,0 +1,15 @@
+# Minimal runtime dependencies for the VisLoc3D API server.
+#
+# Deliberately NOT reusing the project's root requirements.txt: matplotlib,
+# scipy, and filterpy are needed for the offline evaluation/chart scripts
+# and the (unrelated) 2D UKF fusion code, but nothing in server/main.py or
+# its actual import chain (visloc.world, visloc.localizer, visloc3d.camera)
+# touches any of them. Fewer build-time dependencies means a faster, more
+# reliable Render build and a smaller dependency surface to go wrong -
+# verified by actually running the server against this exact file in a
+# clean virtualenv before trusting it, not just by inspecting imports.
+numpy>=1.26
+opencv-python-headless>=4.9
+fastapi>=0.115
+uvicorn[standard]>=0.30
+pydantic>=2.7

@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: visloc3d-api
+    runtime: python
+    plan: free
+    region: oregon
+    rootDir: .
+    buildCommand: pip install -r server/requirements.txt
+    # --workers 1 is deliberate, not a default left unexamined: each
+    # additional worker would load its own full copy of the world map +
+    # ~20,000 ORB keypoints at startup, multiplying memory by the worker
+    # count. Measured baseline is ~126MB RSS with one worker (clean venv,
+    # see server/requirements.txt comment) - comfortable inside the free
+    # tier's 512MB limit, but only if this stays at one.
+    startCommand: uvicorn server.main:app --host 0.0.0.0 --port $PORT --workers 1
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: VISLOC_ALLOWED_ORIGINS
+        value: https://aman-24052001.github.io
+      - key: PYTHON_VERSION
+        value: 3.12.3

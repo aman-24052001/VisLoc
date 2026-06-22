@@ -257,7 +257,71 @@ down to the flat-level noise floor at *every* tilt tested — 1.19px level,
 uncorrected estimate grew from 1.19px to 116.51px over the same range.
 The geometric explanation was complete, not partial.
 
-## 8. Interactive 3D viewer (`docs/3d/`)
+## 8. Deployment (`server/`, Render)
+
+ORB matching and homography fitting have no practical browser
+equivalent (unlike the dynamics/controller/battery, which are pure
+linear algebra and ported to JS directly), so that one piece needed an
+actual backend. `server/main.py` is a small FastAPI service exposing
+exactly that: given a real pose, render the camera view and run the same
+validated localizer + nadir-offset correction used throughout this
+project.
+
+**Memory discipline, measured rather than assumed.** The only meaningful
+state - the world map and its ~20,000 ORB keypoints - is built once at
+process startup (`lifespan` context manager), not per-request, mirroring
+how `AbsoluteLocalizer` was already designed in Phase 1 (expensive
+one-time indexing, cheap repeated `localize()` calls). Measured directly,
+not estimated:
+- Baseline RSS after startup, full dependency set: 133.6MB
+- Baseline RSS, minimal `server/requirements.txt` in a clean venv: 126.5MB
+- After 150 mixed requests (15 with full frame-image encoding): 139.0MB
+- After 500 requests: 139.1MB — confirms the small initial bump is one-
+  time buffer warmup, not a leak; memory is flat under sustained load
+
+All comfortably inside Render's free-tier 512MB limit, with margin to
+spare. `render.yaml` pins `--workers 1` explicitly rather than relying on
+a default: each additional worker would load its own full copy of the
+world map and keypoint index, multiplying memory by the worker count -
+the single most important lever for staying inside the free tier, made
+explicit rather than left to whatever uvicorn happens to default to.
+
+`server/requirements.txt` deliberately doesn't reuse the project's root
+`requirements.txt` - matplotlib, scipy, and filterpy are needed for the
+offline evaluation/chart scripts and the unrelated 2D fusion code, but
+nothing in the server's actual import chain touches any of them. Cut
+them and verified the server still runs correctly (and uses slightly
+*less* memory) in a clean virtualenv before trusting the smaller file.
+
+**Edge cases checked, not assumed handled:** out-of-bounds position
+(400), zero/malformed quaternion (400), malformed request body (422,
+automatic via Pydantic validation), and a camera pointed above the
+horizon (200 with `success: false`, not a crash - render_view() doesn't
+itself guard this case, but the resulting degenerate image naturally
+fails ORB matching before nadir_offset()'s explicit ValueError path is
+ever reached).
+
+**The live 3D viewer (`docs/3d/`) now has a "Take a fix" button** wiring
+the whole validated pipeline together end-to-end: live JS flight physics
+→ real attitude → server-side camera render → real ORB localization →
+geometric correction, displayed against the actual rendered camera frame.
+Required bridging a unit mismatch that had never been made explicit
+before this point: flight dynamics run in real meters, but the world map
+calibration uses "world units" (`z_ref=200` ≈ a realistic ~57° FOV
+footprint) - `METERS_TO_WORLD_UNITS = 40` ties them together deliberately
+(documented in the viewer's JS) rather than leaving an implicit,
+undocumented scale mismatch. End-to-end tested by hand via Playwright
+against a live server, not just unit-tested in isolation: a real banking
+maneuver at -7°/-6° roll/pitch showed a raw error of 6.13m collapsing to
+0.09m corrected - the same effect validated in Python, now visible
+through the actual deployed pipeline.
+
+**Deployment is prepared, not completed** - I can't create or access a
+Render account on anyone's behalf. `render.yaml` is committed and ready
+for one-click Blueprint deployment; the actual "connect repo and deploy"
+step needs to happen from the account owner's side.
+
+## 9. Interactive 3D viewer (`docs/3d/`)
 
 A live, interactive viewer - not a precomputed/played-back animation.
 The dynamics, motor mixing, controller, and battery model are ported to
@@ -288,7 +352,7 @@ restores both the vehicle state and the target controls. Telemetry
 (position, speed, attitude, motor power, battery %, pack voltage) reads
 directly from the same simulation object driving the render.
 
-## 9. Planned module layout
+## 10. Planned module layout
 
 ```
 visloc3d/
@@ -301,14 +365,19 @@ visloc3d/
   evaluate_dynamics.py   Hover/step-response validation, charts
   evaluate_battery.py     Reproduces the paper's Table III, charts
 tests/
-  test_dynamics3d.py, test_motor_mixing.py, test_vehicle.py, test_battery.py
+  test_dynamics3d.py, test_motor_mixing.py, test_vehicle.py, test_battery.py,
+  test_camera.py, test_server.py
 docs/3d/
-  index.html              Interactive Three.js viewer
+  index.html              Interactive Three.js viewer + "Take a fix" panel
   assets/sim3d.js           JS port of dynamics+controller+battery, validated bit-for-bit
   assets/three.module.min.js, assets/OrbitControls.js   Vendored locally (see Section 9)
+server/
+  main.py                  FastAPI service: camera render + ORB localize + correction
+  requirements.txt           Minimal runtime deps (no matplotlib/scipy/filterpy)
+render.yaml                  One-click Render Blueprint deployment config
 ```
 
-## 10. Validation findings (what actually broke, and how it was found)
+## 11. Validation findings (what actually broke, and how it was found)
 
 Consistent with how every phase of the main VisLoc pipeline was built,
 nothing here was trusted just because the math looked right - each
@@ -371,7 +440,7 @@ were found and fixed in the process:
    v2 item (the same way wind/turbulence is), not a silent gap - noted
    here so it isn't mistaken for a validated capability.
 
-## 11. References
+## 12. References
 
 - C. A. Dimmig et al., "Survey of Simulators for Aerial Robots," 2023, arXiv:2311.02296
 - L. Bauersfeld & D. Scaramuzza, "Range, Endurance, and Optimal Speed Estimates for Multicopters," IEEE RA-L, 2022, arXiv:2109.04741

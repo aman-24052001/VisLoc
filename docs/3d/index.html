@@ -67,9 +67,24 @@
     background:transparent;border:none;}
   #hint kbd{border:1px solid var(--hairline);border-radius:2px;padding:1px 5px;}
 
+  #localization{top:70px;right:20px;width:240px;font-size:11.5px;}
+  #localization .row{display:flex;justify-content:space-between;padding:3px 0;
+    border-bottom:1px solid var(--hairline);}
+  #localization .row:last-child{border-bottom:none;}
+  #localization .label{color:var(--text-faint);}
+  #localization .val{color:var(--text);}
+  #localization .val.accent{color:var(--amber);}
+  #apiUrlInput{width:100%;background:var(--bg);border:1px solid var(--hairline);color:var(--text);
+    font-family:inherit;font-size:10.5px;padding:7px 8px;border-radius:2px;}
+  #fixBtn{background:transparent;border:1px solid var(--hairline);color:var(--text-dim);
+    font-size:11px;padding:7px 12px;border-radius:2px;cursor:pointer;font-family:inherit;}
+  #fixBtn:hover{border-color:var(--amber);color:var(--amber);}
+  #fixBtn:disabled{opacity:0.4;cursor:default;}
+
   @media (max-width:640px){
     #telemetry{width:170px;font-size:10px;}
     #controls{width:220px;}
+    #localization{display:none;}
     #hint{display:none;}
   }
 </style>
@@ -120,6 +135,26 @@
   <div class="transport-row">
     <button id="playPauseBtn">Pause</button>
     <button id="resetBtn">Reset</button>
+  </div>
+</div>
+
+<div class="panel" id="localization">
+  <div class="ctrl-label">Real ORB localization (server-side)</div>
+  <input type="text" id="apiUrlInput" placeholder="https://your-app.onrender.com" value="">
+  <button id="fixBtn" style="margin-top:8px;width:100%;">Take a fix</button>
+  <div id="fixResult" style="margin-top:10px;font-size:11px;line-height:1.6;display:none;">
+    <div class="row"><span class="label">Status</span><span class="val" id="fixStatus">-</span></div>
+    <div class="row"><span class="label">Raw error</span><span class="val" id="fixRawErr">-</span></div>
+    <div class="row"><span class="label">Corrected error</span><span class="val accent" id="fixCorrErr">-</span></div>
+    <div class="row"><span class="label">ORB inliers</span><span class="val" id="fixInliers">-</span></div>
+  </div>
+  <img id="fixFrame" style="display:none;width:100%;margin-top:8px;border:1px solid var(--hairline);image-rendering:pixelated;">
+  <div class="control-hint" style="margin-top:8px;">
+    Same validated camera projection + ORB localizer + nadir-offset
+    correction as the Python pipeline, running server-side (OpenCV has no
+    practical browser equivalent). 1 simulator meter = 40 world units;
+    flight position maps to world (900, 900) ± that scale, matching the
+    same world map used throughout the project.
   </div>
 </div>
 
@@ -296,6 +331,79 @@ els.resetBtn.addEventListener('click', () => {
   els.x.value = 0; els.y.value = 0; els.z.value = 5; els.yaw.value = 0;
   syncTargetFromControls();
   setPlaying(true);
+});
+
+// --- Real ORB localization, server-side ---
+// Explicit unit bridge: the flight dynamics run in real meters (a
+// hover at z=5 is 5 meters up), but the world map + camera projection
+// use "world units" calibrated so z_ref=200 gives a sensible ~57deg-FOV
+// footprint (see visloc3d/camera.py). These were never the same unit
+// system - SCALE ties them together deliberately rather than leaving an
+// implicit, undocumented mismatch.
+const METERS_TO_WORLD_UNITS = 40;
+const WORLD_CENTER = 900;
+
+const fixEls = {
+  apiUrlInput: document.getElementById('apiUrlInput'),
+  fixBtn: document.getElementById('fixBtn'),
+  fixResult: document.getElementById('fixResult'),
+  fixStatus: document.getElementById('fixStatus'),
+  fixRawErr: document.getElementById('fixRawErr'),
+  fixCorrErr: document.getElementById('fixCorrErr'),
+  fixInliers: document.getElementById('fixInliers'),
+  fixFrame: document.getElementById('fixFrame'),
+};
+
+fixEls.fixBtn.addEventListener('click', async () => {
+  const apiUrl = fixEls.apiUrlInput.value.trim().replace(/\/$/, '');
+  if (!apiUrl) { alert('Enter the deployed API URL first (see render.yaml in the repo).'); return; }
+
+  const p = drone.state.p;
+  const worldPos = [
+    WORLD_CENTER + p[0] * METERS_TO_WORLD_UNITS,
+    WORLD_CENTER + p[1] * METERS_TO_WORLD_UNITS,
+    Math.max(1, p[2] * METERS_TO_WORLD_UNITS),
+  ];
+
+  fixEls.fixBtn.disabled = true;
+  fixEls.fixBtn.textContent = 'Requesting...';
+  fixEls.fixResult.style.display = 'block';
+  fixEls.fixStatus.textContent = 'contacting server...';
+
+  try {
+    const res = await fetch(apiUrl + '/api/localize', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ position: worldPos, quat: drone.state.q, include_frame: true }),
+    });
+    const data = await res.json();
+
+    if (!data.success) {
+      fixEls.fixStatus.textContent = 'no fix (insufficient matches)';
+      fixEls.fixRawErr.textContent = '-';
+      fixEls.fixCorrErr.textContent = '-';
+      fixEls.fixInliers.textContent = data.n_inliers ?? '0';
+      fixEls.fixFrame.style.display = 'none';
+    } else {
+      const rawErr = Math.hypot(data.raw_xy[0] - worldPos[0], data.raw_xy[1] - worldPos[1]) / METERS_TO_WORLD_UNITS;
+      const corrErr = Math.hypot(data.corrected_xy[0] - worldPos[0], data.corrected_xy[1] - worldPos[1]) / METERS_TO_WORLD_UNITS;
+      fixEls.fixStatus.textContent = 'locked';
+      fixEls.fixRawErr.textContent = rawErr.toFixed(2) + ' m';
+      fixEls.fixCorrErr.textContent = corrErr.toFixed(2) + ' m';
+      fixEls.fixInliers.textContent = data.n_inliers;
+      if (data.frame_png_base64) {
+        fixEls.fixFrame.src = 'data:image/png;base64,' + data.frame_png_base64;
+        fixEls.fixFrame.style.display = 'block';
+      }
+    }
+  } catch (e) {
+    fixEls.fixStatus.textContent = 'request failed (CORS / server down?)';
+    fixEls.fixRawErr.textContent = '-';
+    fixEls.fixCorrErr.textContent = '-';
+  } finally {
+    fixEls.fixBtn.disabled = false;
+    fixEls.fixBtn.textContent = 'Take a fix';
+  }
 });
 
 function updateTelemetry() {
