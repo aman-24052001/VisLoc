@@ -28,7 +28,7 @@ const WorldPhysics = (function () {
   function normalize(a) { const n = norm(a) || 1e-9; return scale(a, 1 / n); }
 
   class Sphere {
-    constructor({ position, radius, mass, restitution = 0.55, friction = 0.92, color }) {
+    constructor({ position, radius, mass, restitution = 0.55, friction = 0.92, color, kinematic = false }) {
       this.position = [...position];
       this.velocity = [0, 0, 0];
       this.radius = radius;
@@ -37,6 +37,11 @@ const WorldPhysics = (function () {
       this.friction = friction; // per-second-ish multiplicative damping while grounded
       this.color = color;
       this.angularSpin = 0; // purely cosmetic rolling-visual driver, not real rotational dynamics
+      // Kinematic: position is driven externally each frame (a scripted
+      // patrol/oscillation path), not by gravity+integration below - but
+      // it still participates fully in collision detection, so other
+      // objects (including the drone) correctly sense and respond to it.
+      this.kinematic = kinematic;
     }
   }
 
@@ -81,8 +86,9 @@ const WorldPhysics = (function () {
     addBox(opts) { const b = new StaticBox(opts); this.boxes.push(b); return b; }
 
     step(dt) {
-      // Gravity + ground collision for each dynamic sphere
+      // Gravity + ground collision for each dynamic (non-kinematic) sphere
       for (const s of this.spheres) {
+        if (s.kinematic) continue; // position driven externally each frame
         s.velocity[2] -= GRAVITY * dt;
         s.position = add(s.position, scale(s.velocity, dt));
 
@@ -111,12 +117,22 @@ const WorldPhysics = (function () {
           const minDist = a.radius + b.radius;
           if (dist > 1e-9 && dist < minDist) {
             const n = scale(d, 1 / dist);
-            const { velA, velB } = resolveNormalImpulse(a.velocity, b.velocity, a.mass, b.mass, n, Math.min(a.restitution, b.restitution));
-            a.velocity = velA; b.velocity = velB;
+            // Kinematic spheres (scripted patrol motion) act as infinite
+            // mass for collision response - their position is overridden
+            // externally every frame regardless, so letting them "absorb"
+            // velocity changes here would just be discarded and could
+            // produce a misleading intermediate state.
+            const massA = a.kinematic ? Infinity : a.mass;
+            const massB = b.kinematic ? Infinity : b.mass;
+            const { velA, velB } = resolveNormalImpulse(a.velocity, b.velocity, massA, massB, n, Math.min(a.restitution, b.restitution));
+            if (!a.kinematic) a.velocity = velA;
+            if (!b.kinematic) b.velocity = velB;
             const overlap = minDist - dist;
-            const totalMass = a.mass + b.mass;
-            a.position = sub(a.position, scale(n, overlap * (b.mass / totalMass)));
-            b.position = add(b.position, scale(n, overlap * (a.mass / totalMass)));
+            const invMassA = a.kinematic ? 0 : 1 / a.mass;
+            const invMassB = b.kinematic ? 0 : 1 / b.mass;
+            const invTotal = invMassA + invMassB || 1; // both kinematic (shouldn't happen) - avoid /0
+            if (!a.kinematic) a.position = sub(a.position, scale(n, overlap * (invMassA / invTotal)));
+            if (!b.kinematic) b.position = add(b.position, scale(n, overlap * (invMassB / invTotal)));
           }
         }
       }
@@ -167,12 +183,16 @@ const WorldPhysics = (function () {
         const minDist = droneRadius + s.radius;
         if (dist > 1e-9 && dist < minDist) {
           const n = scale(d, 1 / dist);
-          const { velA, velB } = resolveNormalImpulse(vel, s.velocity, droneMass, s.mass, n, Math.min(restitution, s.restitution));
-          vel = velA; s.velocity = velB;
+          const sMass = s.kinematic ? Infinity : s.mass;
+          const { velA, velB } = resolveNormalImpulse(vel, s.velocity, droneMass, sMass, n, Math.min(restitution, s.restitution));
+          vel = velA;
+          if (!s.kinematic) s.velocity = velB;
           const overlap = minDist - dist;
-          const totalMass = droneMass + s.mass;
-          pos = sub(pos, scale(n, overlap * (s.mass / totalMass)));
-          s.position = add(s.position, scale(n, overlap * (droneMass / totalMass)));
+          const invDrone = 1 / droneMass;
+          const invS = s.kinematic ? 0 : 1 / s.mass;
+          const invTotal = invDrone + invS;
+          pos = sub(pos, scale(n, overlap * (invS / invTotal)));
+          if (!s.kinematic) s.position = add(s.position, scale(n, overlap * (invDrone / invTotal)));
         }
       }
       for (const box of this.boxes) {
@@ -199,6 +219,62 @@ const WorldPhysics = (function () {
       let e = 0;
       for (const s of this.spheres) e += 0.5 * s.mass * dot(s.velocity, s.velocity);
       return e;
+    }
+
+    // Reactive local avoidance, not path planning: a drone with no map
+    // and only a short-range proximity sensor (sonar/lidar) reacts to
+    // whatever's currently within senseRadius, the same way real
+    // obstacle-avoidance firmware does without SLAM. Artificial
+    // potential field formulation (Khatib, "Real-Time Obstacle
+    // Avoidance for Manipulators and Mobile Robots," 1986): repulsion
+    // strength grows as 1/distance, is exactly zero at the sensing
+    // boundary (so there's no discontinuity when something enters or
+    // leaves range), and only dominates the flight controller's own
+    // goal-seeking when an obstacle is actually close - which is what
+    // produces minimum-deviation dodges rather than wide, unnecessary
+    // detours: far obstacles barely nudge the path at all.
+    computeAvoidanceAccel(position, senseRadius, gain, maxAccel) {
+      let accel = [0, 0, 0];
+
+      // Pure radial repulsion has a well-known failure mode: a perfectly
+      // symmetric head-on approach gives no preferred left/right
+      // direction, so the repulsion just pushes straight back against
+      // the goal-seeking force with nothing to break the tie - found by
+      // testing a deliberately symmetric case (straight line through an
+      // obstacle's exact center), not assumed: the drone stalled
+      // pressed against the surface rather than curving around it.
+      // Standard fix (used in real potential-field local planners):
+      // add a tangential component, consistently rotated the same way
+      // every time, so symmetry never has a chance to form in the first
+      // place. tangentSign=+1 means "always curve left when viewed from
+      // above" - an arbitrary but *consistent* choice is what matters.
+      const tangentSign = 1;
+      const tangentFraction = 0.6;
+
+      const accumulate = (surfaceDist, direction) => {
+        const d = Math.max(surfaceDist, 0.05); // safety floor - 1/d^2 is singular at d=0
+        if (d >= senseRadius) return;
+        const mag = gain * (1 / d - 1 / senseRadius) * (1 / (d * d));
+        accel = add(accel, scale(direction, mag));
+        const tangent = [-direction[1] * tangentSign, direction[0] * tangentSign, 0];
+        accel = add(accel, scale(tangent, mag * tangentFraction));
+      };
+
+      for (const box of this.boxes) {
+        const cp = box.closestPoint(position);
+        const d = sub(position, cp);
+        const dist = norm(d);
+        if (dist > 1e-9) accumulate(dist, scale(d, 1 / dist));
+      }
+      for (const s of this.spheres) {
+        const d = sub(position, s.position);
+        const centerDist = norm(d);
+        if (centerDist > 1e-9) accumulate(centerDist - s.radius, scale(d, 1 / centerDist));
+      }
+
+      const mag = norm(accel);
+      if (mag > maxAccel) accel = scale(accel, maxAccel / mag);
+      return accel;
     }
   }
 

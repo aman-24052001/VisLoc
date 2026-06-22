@@ -181,12 +181,21 @@ const VisLoc3D = (function () {
       this.ratePid = [0, 1, 2].map(() => new PID(this.g.rateKp, this.g.rateKi, this.g.rateKd, 1.0));
     }
     reset() { this.ratePid.forEach(p => p.reset()); }
-    compute(state, targetPos, targetYaw, dt) {
+    compute(state, targetPos, targetYaw, dt, avoidAccel) {
       const [roll, pitch, yaw] = quatToEuler(state.q);
       const posErr = vecSub(targetPos, state.p);
       const velErr = vecScale(state.v, -1);
       let accDes = vecAdd(vecScale(posErr, this.g.posKp), vecScale(velErr, this.g.posKd));
       accDes[2] = this.g.altKp * posErr[2] + this.g.altKd * velErr[2];
+
+      // Reactive obstacle avoidance simply adds to the goal-seeking
+      // acceleration, the same structure as a potential-field local
+      // planner layered on a goal controller: the drone is always
+      // "trying" to reach its target, and nearby obstacles add a
+      // perturbation that's strong up close and zero once clear -
+      // producing minimum-deviation dodges rather than a separate
+      // "avoid mode" that overrides navigation entirely.
+      if (avoidAccel) accDes = vecAdd(accDes, avoidAccel);
 
       const ax = accDes[0], ay = accDes[1];
       const axBody = ax * Math.cos(yaw) + ay * Math.sin(yaw);
@@ -302,8 +311,8 @@ const VisLoc3D = (function () {
       this.lastElecPower = 0;
       if (fullBattery) this.battery = new Battery(this.batterySpec);
     }
-    step(targetPos, targetYaw, dt) {
-      const { thrust, tau } = this.controller.compute(this.state, targetPos, targetYaw, dt);
+    step(targetPos, targetYaw, dt, avoidAccel) {
+      const { thrust, tau } = this.controller.compute(this.state, targetPos, targetYaw, dt, avoidAccel);
       const omegaSq = this.mixer.allocate(thrust, tau);
       this.lastOmegaSq = omegaSq;
       const { fBody, tauBody } = this.mixer.mix(omegaSq);

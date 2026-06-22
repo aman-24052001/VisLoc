@@ -145,6 +145,9 @@
   <div class="row"><span class="label">Pack voltage</span><span class="val" id="tVoltage">14.8 V</span></div>
   <div id="battery-bar"><div id="battery-fill"></div></div>
   <div id="depleted-msg">BATTERY DEPLETED — simulation paused</div>
+  <div class="row" style="border-top:1px solid var(--hairline);margin-top:4px;padding-top:7px;">
+    <span class="label">Nearest obstacle</span><span class="val" id="tNearest">— m</span></div>
+  <div class="row"><span class="label">Avoidance</span><span class="val" id="tAvoidance">clear</span></div>
 </div>
 
 <div class="panel" id="controls">
@@ -179,6 +182,16 @@
       color:var(--coral);font-size:11px;padding:7px 12px;border-radius:2px;cursor:pointer;font-family:inherit;">
       Cut motors (watch gravity)
     </button>
+  </div>
+  <div class="transport-row" style="margin-top:8px;border-top:1px solid var(--hairline);padding-top:12px;">
+    <button id="autonomousBtn" style="flex:1;background:transparent;border:1px solid #b15ee0;
+      color:#b15ee0;font-size:11px;padding:7px 12px;border-radius:2px;cursor:pointer;font-family:inherit;">
+      Autonomous: random waypoints + dodge
+    </button>
+  </div>
+  <div class="control-hint" style="margin-top:6px;">
+    No map, no foreknowledge - picks a random destination, reacts only to
+    whatever enters its ~3.5m sensing range, then resumes course.
   </div>
 </div>
 
@@ -298,6 +311,40 @@ ballSpecs.forEach(spec => {
   ballMeshes.push({ mesh, sphere });
 });
 
+// --- moving (patrol) obstacles: kinematic spheres on a scripted path,
+// not free dynamics - genuinely moving hazards, not just restable balls.
+// Distinct emissive magenta so they read as "this one moves" at a glance. ---
+const patrolMat = new THREE.MeshStandardMaterial({ color: 0xb15ee0, emissive: 0xb15ee0, emissiveIntensity: 0.35, roughness: 0.4 });
+const patrolSpecs = [
+  { kind: 'oscillate', center: [0, -7, 1.5], axis: 0, amplitude: 4.5, period: 9, radius: 0.4 },
+  { kind: 'circle', center: [-9, 7, 1.3], radius3d: 3.2, period: 13, radius: 0.38 },
+  { kind: 'oscillate', center: [9, -5, 2.2], axis: 1, amplitude: 3.5, period: 7, radius: 0.42 },
+];
+const patrolObstacles = patrolSpecs.map(spec => {
+  const sphere = physWorld.addSphere({ position: spec.center, radius: spec.radius, mass: 1.0, kinematic: true });
+  const mesh = new THREE.Mesh(new THREE.SphereGeometry(spec.radius, 20, 16), patrolMat);
+  scene.add(mesh);
+  return { spec, sphere, mesh };
+});
+
+function updatePatrolObstacles(simTime) {
+  for (const { spec, sphere } of patrolObstacles) {
+    const phase = (2 * Math.PI * simTime) / spec.period;
+    if (spec.kind === 'oscillate') {
+      const offset = spec.amplitude * Math.sin(phase);
+      const p = [...spec.center];
+      p[spec.axis] += offset;
+      sphere.position = p;
+    } else if (spec.kind === 'circle') {
+      sphere.position = [
+        spec.center[0] + spec.radius3d * Math.cos(phase),
+        spec.center[1] + spec.radius3d * Math.sin(phase),
+        spec.center[2],
+      ];
+    }
+  }
+}
+
 // --- drone model: body + 4 arms + 4 rotor discs, oriented by the real quaternion ---
 const droneGroup = new THREE.Group();
 const bodyMat = new THREE.MeshStandardMaterial({ color: 0xECEAE3, roughness: 0.4, metalness: 0.3 });
@@ -410,6 +457,14 @@ scene.add(groundMarker);
 
 const altLabelEl = document.getElementById('altLabel');
 
+// --- sensing-radius visualization: a faint wireframe sphere around the
+// drone, showing exactly the range the avoidance system actually reacts
+// within - makes "why is it dodging right now" visible, not just implied. ---
+const SENSE_RADIUS = 3.5;
+const senseMat = new THREE.MeshBasicMaterial({ color: 0xb15ee0, wireframe: true, transparent: true, opacity: 0.12 });
+const senseMesh = new THREE.Mesh(new THREE.SphereGeometry(SENSE_RADIUS, 16, 12), senseMat);
+scene.add(senseMesh);
+
 function updateAltitudeReference(p) {
   const top = toThreePos(p);
   const base = new THREE.Vector3(top.x, 0, top.z);
@@ -467,6 +522,7 @@ const els = {
   tAttitude: document.getElementById('tAttitude'), tPower: document.getElementById('tPower'),
   tBattery: document.getElementById('tBattery'), tVoltage: document.getElementById('tVoltage'),
   batteryFill: document.getElementById('battery-fill'), depletedMsg: document.getElementById('depleted-msg'),
+  tNearest: document.getElementById('tNearest'), tAvoidance: document.getElementById('tAvoidance'),
   playPauseBtn: document.getElementById('playPauseBtn'), resetBtn: document.getElementById('resetBtn'),
 };
 
@@ -497,9 +553,12 @@ els.playPauseBtn.addEventListener('click', () => setPlaying(!playing));
 els.resetBtn.addEventListener('click', () => {
   drone.reset(0, 0, 0.3);
   trailCount = 0;
+  simTime = 0;
   els.x.value = 0; els.y.value = 0; els.z.value = 5; els.yaw.value = 0;
   syncTargetFromControls();
   setPlaying(true);
+  if (motorsCut) cutMotorsBtn.click();
+  if (autonomousMode) autonomousBtn.click();
 });
 
 // --- Real ORB localization, server-side ---
@@ -607,10 +666,26 @@ function updateTelemetry() {
   els.batteryFill.style.width = (soc * 100) + '%';
   els.batteryFill.style.background = soc < 0.15 ? '#C9776A' : '#F2B441';
   els.depletedMsg.style.display = drone.batteryDepleted ? 'block' : 'none';
+
+  let nearest = Infinity;
+  for (const box of physWorld.boxes) {
+    const cp = box.closestPoint(p);
+    nearest = Math.min(nearest, Math.hypot(p[0] - cp[0], p[1] - cp[1], p[2] - cp[2]));
+  }
+  for (const s of physWorld.spheres) {
+    const d = Math.hypot(p[0] - s.position[0], p[1] - s.position[1], p[2] - s.position[2]) - s.radius;
+    nearest = Math.min(nearest, d);
+  }
+  els.tNearest.textContent = (nearest < 50 ? nearest.toFixed(2) : '—') + ' m';
+  const avoidMag = Math.hypot(...lastAvoidAccel);
+  els.tAvoidance.textContent = avoidMag > 0.05 ? 'dodging' : 'clear';
+  els.tAvoidance.style.color = avoidMag > 0.05 ? '#b15ee0' : 'var(--text)';
 }
 
 let lastTime = performance.now();
 let motorsCut = false;
+let simTime = 0;
+let lastAvoidAccel = [0, 0, 0];
 const cutMotorsBtn = document.getElementById('cutMotorsBtn');
 cutMotorsBtn.addEventListener('click', () => {
   motorsCut = !motorsCut;
@@ -629,6 +704,41 @@ cutMotorsBtn.addEventListener('click', () => {
   }
 });
 
+// --- Autonomous mode: random destinations, no foreknowledge of
+// obstacles - just reactive avoidance reacting to whatever's currently
+// within sensing range. "Reached" or "timed out" triggers a new
+// destination, whichever comes first, so it never gets stuck waiting
+// forever near an obstacle it's having trouble clearing. ---
+let autonomousMode = false;
+let nextWaypointDeadline = 0;
+const AVOID_GAIN = 2.2, AVOID_MAX_ACCEL = 9.0;
+const autonomousBtn = document.getElementById('autonomousBtn');
+
+function pickRandomWaypoint() {
+  const x = (Math.random() * 2 - 1) * 12;
+  const y = (Math.random() * 2 - 1) * 12;
+  const z = 1.5 + Math.random() * 7;
+  const yaw = (Math.random() * 2 - 1) * 180;
+  els.x.value = x.toFixed(1); els.y.value = y.toFixed(1);
+  els.z.value = z.toFixed(1); els.yaw.value = yaw.toFixed(0);
+  syncTargetFromControls();
+  nextWaypointDeadline = simTime + 11; // seconds of simulated time
+}
+
+autonomousBtn.addEventListener('click', () => {
+  autonomousMode = !autonomousMode;
+  if (autonomousMode) {
+    autonomousBtn.textContent = 'Autonomous: ON (click to stop)';
+    autonomousBtn.style.color = '#0a0b0d';
+    autonomousBtn.style.background = '#b15ee0';
+    pickRandomWaypoint();
+  } else {
+    autonomousBtn.textContent = 'Autonomous: random waypoints + dodge';
+    autonomousBtn.style.color = '#b15ee0';
+    autonomousBtn.style.background = 'transparent';
+  }
+});
+
 function animate() {
   requestAnimationFrame(animate);
   const now = performance.now();
@@ -642,6 +752,9 @@ function animate() {
     let remaining = frameDt;
     while (remaining > 1e-6) {
       const step = Math.min(DT, remaining);
+      simTime += step;
+      updatePatrolObstacles(simTime);
+
       if (motorsCut) {
         // Bypass the controller and motor mixing entirely - zero thrust,
         // zero torque, straight into the same validated rigid-body
@@ -652,7 +765,15 @@ function animate() {
         drone.lastOmegaSq = [0, 0, 0, 0];
         drone.lastElecPower = 0;
       } else {
-        drone.step(target, targetYaw, step);
+        // Reactive avoidance: computed fresh every substep from current
+        // position, using only what's currently within sensing range -
+        // no map, no path planning, exactly the "no awareness of
+        // surroundings" brief. Adds to (doesn't replace) the controller's
+        // own goal-seeking, so the drone always still wants to reach its
+        // target - it just gets diverted minimally while something is close.
+        const avoidAccel = physWorld.computeAvoidanceAccel(drone.state.p, SENSE_RADIUS, AVOID_GAIN, AVOID_MAX_ACCEL);
+        lastAvoidAccel = avoidAccel;
+        drone.step(target, targetYaw, step, avoidAccel);
       }
 
       // World objects (balls) get the same fixed-step physics treatment -
@@ -669,6 +790,12 @@ function animate() {
 
       remaining -= step;
     }
+
+    if (autonomousMode) {
+      const distToTarget = Math.hypot(drone.state.p[0] - target[0], drone.state.p[1] - target[1], drone.state.p[2] - target[2]);
+      if (distToTarget < 1.0 || simTime >= nextWaypointDeadline) pickRandomWaypoint();
+    }
+
     pushTrail(drone.state.p);
     if (drone.state.p[2] <= 0.02 && motorsCut) {
       // Hit the ground while falling - stop there rather than tunneling
@@ -682,9 +809,13 @@ function animate() {
   ballMeshes.forEach(({ mesh, sphere }) => {
     mesh.position.copy(toThreePos(sphere.position));
   });
+  patrolObstacles.forEach(({ mesh, sphere }) => {
+    mesh.position.copy(toThreePos(sphere.position));
+  });
 
   droneGroup.position.copy(toThreePos(drone.state.p));
   droneGroup.quaternion.copy(toThreeQuat(drone.state.q));
+  senseMesh.position.copy(droneGroup.position);
   controls.target.lerp(droneGroup.position, 0.04);
 
   // Spin each rotor proportional to its actual commanded speed (rad/s) -

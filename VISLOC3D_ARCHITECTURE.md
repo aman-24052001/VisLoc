@@ -352,7 +352,80 @@ restores both the vehicle state and the target controls. Telemetry
 (position, speed, attitude, motor power, battery %, pack voltage) reads
 directly from the same simulation object driving the render.
 
-## 10. Planned module layout
+## 10. World physics objects (`world_physics.js`)
+
+Static obstacles (buildings) and dynamic objects (balls of varied real
+mass, 0.15-3.0kg) the drone can actually collide with - impulse-based
+collision resolution (Erin Catto's standard formulation), not a scripted
+bounce. Validated with 7 tests before any visual integration: exact
+momentum conservation (drift 0.000000 across a 2-sphere collision),
+energy values matching hand-calculated theory exactly (equal-mass
+collision at e=0.5: 12.5J -> 7.8125J, matching the textbook formula to
+the decimal), stable rest states (a dropped ball settles in finite time,
+never bounces forever), no tunneling through walls, and correct
+asymmetric-mass momentum transfer (a 0.9kg drone hitting a 0.05kg ball:
+momentum conserved to within rounding, 2.7 -> 2.70025).
+
+**A real sign-convention bug, found by tracing rather than assumed away.**
+Two of three collision code paths (sphere-vs-box, drone-vs-box) computed
+their collision normal in the opposite direction from what the impulse
+formula expected - sphere-vs-sphere happened to have it right, which is
+exactly why momentum conservation passed immediately while wall and
+ball-knock tests failed in a specific, deceptive way: the position
+correction (direction-symmetric regardless of which way the normal
+points) kept working, masking that the velocity response silently never
+fired. A ball thrown at a wall froze in place at exactly the contact
+distance, velocity completely unchanged - traced step-by-step rather
+than guessed at. Fixed both call sites; re-validated to floating-point
+agreement with hand-derived theory (e.g. a 0.7-restitution wall bounce:
+v' = -0.7 * 8 = -5.6 exactly).
+
+## 11. Reactive obstacle avoidance (`world_physics.js`, "Autonomous" mode)
+
+A genuinely different problem from Section 10's collision response:
+that's *reaction after contact*. This is *avoidance before contact* - a
+drone with no map and only a short-range proximity sensor, the way real
+obstacle-avoidance firmware works without SLAM. Implemented as an
+artificial potential field (Khatib, "Real-Time Obstacle Avoidance for
+Manipulators and Mobile Robots," 1986): repulsion strength grows as
+1/distance, is exactly zero at the sensing boundary (~3.5m), and simply
+adds to the flight controller's own goal-seeking acceleration - so the
+drone is always still trying to reach its target, just minimally
+diverted while something is close, resuming course the instant it's
+clear. "Autonomous" mode picks genuinely random destinations (no
+foreknowledge of what's in the way), encountering both static obstacles
+and kinematic (scripted-motion - oscillating/circular patrol paths)
+moving ones.
+
+**A real, found-not-assumed limitation, then fixed.** A deliberately
+adversarial test - start and target placed so the straight-line path
+passes exactly through a building's center - exposed the textbook
+potential-field failure mode: a perfectly symmetric approach gives the
+repulsion no preferred left/right direction, so it just opposes the
+goal-seeking force with nothing to break the tie. The drone stalled
+pressed against the wall, never reaching the target 7.4m away. Fixed
+with the standard mitigation: a tangential component added to the
+repulsion, consistently rotated the same way every time, so symmetry
+never has a chance to form. Re-ran the identical adversarial test after
+the fix: the drone now reaches the target exactly (0.000m final error),
+briefly grazing the obstacle's collision boundary at the closest approach
+(by design - going around something necessarily means passing close to
+it) rather than stalling against it.
+
+**Validated, not just demoed:** 25 random start/target/obstacle-field
+trials reach their destination 92-96% across repeated runs (some
+randomly-generated configurations are inherently near-unsolvable for any
+reactive method, e.g. a target placed almost inside an obstacle's
+footprint); zero actual tunneling in any trial; and a per-trial
+correlation check confirmed that on the runs where a close graze *did*
+occur, it correlated with continued success, not failure - confirming
+it's benign contact-sliding while working around an obstacle, not a
+disguised stuck state. A "minimum movement" check on the canonical
+head-on case found a 1.25x path-length ratio versus the direct distance
+- a real, quantified answer to "how minimal is the deviation," not just
+an assumption that it's reasonable.
+
+## 12. Planned module layout
 
 ```
 visloc3d/
@@ -368,8 +441,9 @@ tests/
   test_dynamics3d.py, test_motor_mixing.py, test_vehicle.py, test_battery.py,
   test_camera.py, test_server.py
 docs/3d/
-  index.html              Interactive Three.js viewer + "Take a fix" panel
+  index.html              Interactive Three.js viewer + "Take a fix" panel + Autonomous mode
   assets/sim3d.js           JS port of dynamics+controller+battery, validated bit-for-bit
+  assets/world_physics.js    Collision physics + reactive avoidance, validated separately
   assets/three.module.min.js, assets/OrbitControls.js   Vendored locally (see Section 9)
 server/
   main.py                  FastAPI service: camera render + ORB localize + correction
@@ -377,7 +451,7 @@ server/
 render.yaml                  One-click Render Blueprint deployment config
 ```
 
-## 11. Validation findings (what actually broke, and how it was found)
+## 13. Validation findings (what actually broke, and how it was found)
 
 Consistent with how every phase of the main VisLoc pipeline was built,
 nothing here was trusted just because the math looked right - each
@@ -440,7 +514,7 @@ were found and fixed in the process:
    v2 item (the same way wind/turbulence is), not a silent gap - noted
    here so it isn't mistaken for a validated capability.
 
-## 12. References
+## 14. References
 
 - C. A. Dimmig et al., "Survey of Simulators for Aerial Robots," 2023, arXiv:2311.02296
 - L. Bauersfeld & D. Scaramuzza, "Range, Endurance, and Optimal Speed Estimates for Multicopters," IEEE RA-L, 2022, arXiv:2109.04741
