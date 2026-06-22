@@ -119,6 +119,13 @@
     normally cancels it perfectly, every instant, which is exactly why
     you'd never otherwise see it doing anything at all.
   </p>
+  <p style="font-size:12.5px;line-height:1.7;color:var(--text-dim);margin-top:10px;">
+    The buildings and balls scattered around are real physics objects too
+    — momentum-conserving collisions, not animations. Fly into a ball and
+    watch it actually get knocked away (lighter balls fly further); fly
+    into a building and the drone gets physically blocked, not clipped
+    through.
+  </p>
   <button id="introCloseBtn" style="margin-top:14px;width:100%;background:transparent;
     border:1px solid var(--hairline);color:var(--text);font-size:12px;padding:9px;
     border-radius:2px;cursor:pointer;font-family:inherit;">Got it</button>
@@ -203,6 +210,7 @@
 </div>
 
 <script src="assets/sim3d.js"></script>
+<script src="assets/world_physics.js"></script>
 <script type="module">
 import * as THREE from './assets/three.module.min.js';
 import { OrbitControls } from './assets/OrbitControls.js';
@@ -245,6 +253,50 @@ const ground = new THREE.Mesh(new THREE.CircleGeometry(20, 48), groundMat);
 ground.rotation.x = -Math.PI / 2;
 ground.position.y = -0.02;
 scene.add(ground);
+
+// --- physics world: real, validated collision dynamics (see
+// world_physics.js) - momentum-conserving impulse response, not a
+// scripted "bounce" animation. ---
+const physWorld = new WorldPhysics.World();
+const DRONE_COLLISION_RADIUS = 0.35; // real meters, independent of VISUAL_SCALE below
+const buildingMat = new THREE.MeshStandardMaterial({ color: 0x4a5568, roughness: 0.85, metalness: 0.1 });
+const buildingMeshes = [];
+[
+  { center: [6, 2, 2], halfExtents: [1, 1, 2] },
+  { center: [-5, 5, 1.5], halfExtents: [1.5, 1, 1.5] },
+  { center: [3, -6, 3], halfExtents: [1, 1.5, 3] },
+  { center: [-8, -4, 2], halfExtents: [1.2, 1.2, 2] },
+].forEach(spec => {
+  physWorld.addBox(spec);
+  const [hx, hy, hz] = spec.halfExtents;
+  const mesh = new THREE.Mesh(new THREE.BoxGeometry(hx * 2, hz * 2, hy * 2), buildingMat);
+  // toThreePos maps our (x,y,z) to three's (x,z,-y) - apply the same
+  // mapping to the box center so it lines up exactly with its physics
+  // collider, no separate/divergent placement logic.
+  mesh.position.copy(toThreePos(spec.center));
+  scene.add(mesh);
+  buildingMeshes.push(mesh);
+});
+
+const ballSpecs = [
+  { position: [4, 4, 0.4], radius: 0.4, mass: 0.15, color: 0xC9776A },   // light - flies far when hit
+  { position: [2, 6, 0.35], radius: 0.35, mass: 0.5, color: 0xF2B441 },
+  { position: [-3, 3, 0.3], radius: 0.3, mass: 3.0, color: 0x5b8def },   // heavy - barely moves
+  { position: [6, -2, 0.38], radius: 0.38, mass: 0.3, color: 0xC9776A },
+  { position: [0, 8, 0.32], radius: 0.32, mass: 0.8, color: 0xF2B441 },
+  { position: [-6, 2, 0.4], radius: 0.4, mass: 0.15, color: 0xC9776A },
+  { position: [8, 6, 0.35], radius: 0.35, mass: 0.6, color: 0xF2B441 },
+];
+const ballMeshes = [];
+ballSpecs.forEach(spec => {
+  const sphere = physWorld.addSphere(spec);
+  const mesh = new THREE.Mesh(
+    new THREE.SphereGeometry(spec.radius, 20, 16),
+    new THREE.MeshStandardMaterial({ color: spec.color, roughness: 0.5, metalness: 0.15 })
+  );
+  scene.add(mesh);
+  ballMeshes.push({ mesh, sphere });
+});
 
 // --- drone model: body + 4 arms + 4 rotor discs, oriented by the real quaternion ---
 const droneGroup = new THREE.Group();
@@ -602,6 +654,19 @@ function animate() {
       } else {
         drone.step(target, targetYaw, step);
       }
+
+      // World objects (balls) get the same fixed-step physics treatment -
+      // gravity, ground contact, friction, mutual collisions - then the
+      // drone exchanges real momentum with anything it overlaps. This
+      // directly mutates drone.state.p/v, the same pattern already used
+      // above for the motors-cut free-fall case.
+      physWorld.step(step);
+      const collided = physWorld.resolveDroneCollisions(
+        drone.state.p, drone.state.v, DRONE_COLLISION_RADIUS, drone.spec.mass, 0.3
+      );
+      drone.state.p = collided.pos;
+      drone.state.v = collided.vel;
+
       remaining -= step;
     }
     pushTrail(drone.state.p);
@@ -612,6 +677,11 @@ function animate() {
       drone.state.v = [0, 0, 0];
     }
   }
+
+  // Sync ball meshes to their physics state every frame, dynamic or not.
+  ballMeshes.forEach(({ mesh, sphere }) => {
+    mesh.position.copy(toThreePos(sphere.position));
+  });
 
   droneGroup.position.copy(toThreePos(drone.state.p));
   droneGroup.quaternion.copy(toThreeQuat(drone.state.q));
