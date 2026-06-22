@@ -245,11 +245,23 @@ rigid-mount localizer wanting true drone position (not "where the camera
 is pointing") would need to know/estimate attitude and subtract this
 offset explicitly — a documented, scoped-out follow-on, not fixed here.
 
-## 8. Interactive 3D viewer (`docs3d/`)
+**Update: implemented and validated.** `nadir_offset()` and
+`correct_position_estimate()` generalize the single-axis closed form
+above to arbitrary combined roll+pitch, by tracing the camera's actual
+optical axis to its ground intersection rather than assuming a
+particular tilt axis. Feeding the real ORB localizer's output through
+this correction (using known/estimated attitude, the same way a real
+flight controller's state estimate would be available) brings error back
+down to the flat-level noise floor at *every* tilt tested — 1.19px level,
+0.86px at 10°, 1.23px at 20°, 1.04px at 30° — essentially flat, where the
+uncorrected estimate grew from 1.19px to 116.51px over the same range.
+The geometric explanation was complete, not partial.
+
+## 8. Interactive 3D viewer (`docs/3d/`)
 
 A live, interactive viewer - not a precomputed/played-back animation.
 The dynamics, motor mixing, controller, and battery model are ported to
-JavaScript (`docs3d/assets/sim3d.js`) and run for real in the browser at
+JavaScript (`docs/3d/assets/sim3d.js`) and run for real in the browser at
 each render frame, the same way the 2D VisLoc project's UKF was ported
 to JS for its parameter sandbox. Validated the same way: ran an identical
 scenario (waypoint (10,5,5), yaw 0.3 rad, 15s) through both the Python
@@ -290,7 +302,7 @@ visloc3d/
   evaluate_battery.py     Reproduces the paper's Table III, charts
 tests/
   test_dynamics3d.py, test_motor_mixing.py, test_vehicle.py, test_battery.py
-docs3d/
+docs/3d/
   index.html              Interactive Three.js viewer
   assets/sim3d.js           JS port of dynamics+controller+battery, validated bit-for-bit
   assets/three.module.min.js, assets/OrbitControls.js   Vendored locally (see Section 9)

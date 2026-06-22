@@ -4,10 +4,12 @@ import cv2
 
 from visloc3d.camera import (
     CameraIntrinsics, ground_homography, render_view, ground_footprint_corners,
+    nadir_offset, correct_position_estimate,
 )
 from visloc3d.dynamics import quat_from_euler
 from visloc.world import generate_world
 from visloc.simulator import FrameSimulator, make_path
+from visloc.localizer import AbsoluteLocalizer
 
 
 @pytest.fixture(scope="module")
@@ -103,8 +105,9 @@ def test_tilt_shifts_image_center_ground_point_by_altitude_times_tan_tilt():
     confirmed quantitatively from first principles rather than just
     citing it. A localizer wanting true drone position (not "where the
     camera is pointing") from a rigid mount would need to know/estimate
-    attitude and subtract this offset explicitly - left as a documented
-    follow-on, not fixed here.
+    attitude and subtract this offset explicitly - see
+    test_corrected_localization_stays_accurate_across_tilt below, where
+    that correction is implemented and validated.
     """
     intrinsics = CameraIntrinsics.matching_reference_footprint(220, 220, 200.0)
     z = 200.0
@@ -117,3 +120,37 @@ def test_tilt_shifts_image_center_ground_point_by_altitude_times_tan_tilt():
         observed_offset = center_world[1] - 900.0  # roll tilts the Y component
         expected_offset = z * np.tan(np.radians(tilt_deg))
         assert np.isclose(observed_offset, expected_offset, rtol=0.01)
+
+
+def test_nadir_offset_matches_roll_only_closed_form():
+    """nadir_offset() generalizes the single-axis finding above to
+    arbitrary attitude via the actual optical axis / ground intersection
+    - check it reproduces the same closed-form roll-only result exactly,
+    not just approximately, before trusting it for combined tilt."""
+    z = 200.0
+    for tilt_deg in [2, 5, 10, 15]:
+        quat = quat_from_euler(np.radians(tilt_deg), 0, 0)
+        offset = nadir_offset(z, quat)
+        assert np.isclose(offset[0], 0.0, atol=1e-6)
+        assert np.isclose(offset[1], z * np.tan(np.radians(tilt_deg)), rtol=1e-6)
+
+
+def test_corrected_localization_stays_accurate_across_tilt(world):
+    """The actual fix end-to-end: feed real tilted frames through the
+    real ORB localizer, then correct the result with correct_position_
+    estimate() using the (known/estimated) attitude. Error should stay
+    near the flat-level noise floor (~1-2px) across the whole tilt range,
+    not grow with tilt the way the uncorrected estimate does - confirming
+    the geometric explanation was complete, not partial."""
+    intrinsics = CameraIntrinsics.matching_reference_footprint(220, 220, 200.0)
+    loc = AbsoluteLocalizer(world, detector="orb")
+    true_pos = np.array([900.0, 900.0, 200.0])
+
+    for tilt_deg in [0, 10, 20, 30]:
+        quat = quat_from_euler(np.radians(tilt_deg), 0, 0)
+        frame = render_view(world, true_pos, quat, intrinsics)
+        res = loc.localize(frame)
+        assert res.success
+        corrected_xy = correct_position_estimate(np.array([res.x, res.y]), true_pos[2], quat)
+        err = np.hypot(corrected_xy[0] - true_pos[0], corrected_xy[1] - true_pos[1])
+        assert err < 5.0  # stays near the level-case noise floor at every tilt tested

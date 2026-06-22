@@ -113,3 +113,36 @@ def ground_footprint_corners(position: np.ndarray, quat: np.ndarray,
     corners_img = np.array([[0, 0, 1], [size, 0, 1], [size, size, 1], [0, size, 1]], dtype=float)
     world_h = (H_inv @ corners_img.T).T
     return world_h[:, :2] / world_h[:, 2:3]
+
+
+def nadir_offset(position_z: float, quat: np.ndarray) -> np.ndarray:
+    """World (dx, dy) offset between where a tilted rigid camera's image
+    center actually looks (the ground point a localizer naturally
+    recovers) and the drone's true (x, y) position directly below it -
+    the effect quantified during validation (test_camera.py confirms
+    this matches the exact per-axis altitude*tan(tilt) relationship to
+    <1%). Generalizes that single-axis (roll-only) finding to arbitrary
+    combined roll+pitch by tracing the camera's actual optical axis to
+    the ground, rather than assuming a particular tilt axis.
+
+    Real systems either eliminate this with a gimbal (the original
+    ArduPilot project's approach) or - the option this function enables -
+    know/estimate attitude well enough to subtract it explicitly."""
+    R_body_world = quat_to_rotmat(quat)
+    optical_axis_world = R_body_world @ np.array([0.0, 0.0, -1.0])  # R_CAM_BODY's 3rd column is (0,0,-1)
+    if optical_axis_world[2] >= -1e-9:
+        # Camera pointing at or above the horizon - no ground intersection,
+        # a regime real rigid-mount systems must avoid entirely, not a
+        # case this offset correction is meant to paper over.
+        raise ValueError("Camera optical axis does not point toward the ground at this attitude")
+    t = -position_z / optical_axis_world[2]
+    return t * optical_axis_world[:2]
+
+
+def correct_position_estimate(raw_world_xy: np.ndarray, position_z: float,
+                               quat: np.ndarray) -> np.ndarray:
+    """Given the localizer's raw estimate of where the image center looks
+    (its natural output) plus known/estimated altitude and attitude,
+    recover the drone's actual (x, y) position by subtracting the
+    predictable nadir offset."""
+    return raw_world_xy - nadir_offset(position_z, quat)
