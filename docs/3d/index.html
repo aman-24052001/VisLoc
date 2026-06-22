@@ -93,8 +93,39 @@
 
 <header>
   <div class="brand">VISLOC<span class="accent">3D</span></div>
-  <a class="back-link" href="../index.html">&larr; back to VisLoc</a>
+  <div style="display:flex;align-items:center;gap:14px;pointer-events:auto;">
+    <button id="infoBtn" class="back-link" style="cursor:pointer;background:none;font-family:inherit;">what is this?</button>
+    <a class="back-link" href="../index.html">&larr; back to VisLoc</a>
+  </div>
 </header>
+
+<div class="panel" id="introOverlay" style="top:50%;left:50%;transform:translate(-50%,-50%);
+  width:min(420px, 86vw);z-index:20;">
+  <h2 style="font-size:18px;margin-bottom:12px;">What this actually is</h2>
+  <p style="font-size:12.5px;line-height:1.7;color:var(--text-dim);">
+    A real 6-degree-of-freedom rigid-body physics simulation of a
+    quadrotor: gravity, motor thrust, drag, and a cascaded PID flight
+    controller, all integrated step-by-step — not a scripted animation.
+    The battery model is validated against six real commercial drones'
+    published specs. <b style="color:var(--text);">"Take a fix"</b> calls
+    a real backend running OpenCV/ORB computer-vision feature matching
+    against a synthetic satellite-style map, to recover the drone's
+    position from its simulated camera view — the same way real
+    GPS-denied drone navigation works.
+  </p>
+  <p style="font-size:12.5px;line-height:1.7;color:var(--text-dim);margin-top:10px;">
+    <b style="color:var(--text);">Try this:</b> tap <b style="color:var(--coral);">Cut motors</b>
+    mid-flight to watch gravity actually take over — the controller
+    normally cancels it perfectly, every instant, which is exactly why
+    you'd never otherwise see it doing anything at all.
+  </p>
+  <button id="introCloseBtn" style="margin-top:14px;width:100%;background:transparent;
+    border:1px solid var(--hairline);color:var(--text);font-size:12px;padding:9px;
+    border-radius:2px;cursor:pointer;font-family:inherit;">Got it</button>
+</div>
+
+<div id="altLabel" class="panel" style="display:none;padding:4px 8px;font-size:10.5px;z-index:8;
+  transform:translate(-50%,12px);pointer-events:none;color:var(--amber);border-color:var(--amber);"></div>
 
 <div id="viewport"><canvas id="scene"></canvas></div>
 
@@ -136,13 +167,21 @@
     <button id="playPauseBtn">Pause</button>
     <button id="resetBtn">Reset</button>
   </div>
+  <div class="transport-row" style="margin-top:8px;border-top:none;padding-top:0;">
+    <button id="cutMotorsBtn" style="flex:1;background:transparent;border:1px solid var(--coral);
+      color:var(--coral);font-size:11px;padding:7px 12px;border-radius:2px;cursor:pointer;font-family:inherit;">
+      Cut motors (watch gravity)
+    </button>
+  </div>
 </div>
 
 <div class="panel" id="localization">
   <div class="ctrl-label">Real ORB localization (server-side)</div>
-  <input type="text" id="apiUrlInput" placeholder="https://your-app.onrender.com" value="">
+  <input type="text" id="apiUrlInput" placeholder="https://your-app.onrender.com" value="https://visloc3d-api.onrender.com">
   <button id="fixBtn" style="margin-top:8px;width:100%;">Take a fix</button>
   <div id="fixResult" style="margin-top:10px;font-size:11px;line-height:1.6;display:none;">
+    <div class="row"><span class="label">Fix taken at</span></div>
+    <div style="font-size:10px;color:var(--text-faint);margin:-4px 0 6px;" id="fixCapturedAt"></div>
     <div class="row"><span class="label">Status</span><span class="val" id="fixStatus">-</span></div>
     <div class="row"><span class="label">Raw error</span><span class="val" id="fixRawErr">-</span></div>
     <div class="row"><span class="label">Corrected error</span><span class="val accent" id="fixCorrErr">-</span></div>
@@ -231,6 +270,7 @@ const motorPositions = [
   [S * ARM_LEN, S * ARM_LEN], [-S * ARM_LEN, -S * ARM_LEN],
 ];
 const spin = [-1, -1, 1, 1]; // matches sim3d.js motor mixer: 0,1=CW; 2,3=CCW
+const rotorGroups = []; // for spin animation, driven by actual motor speed each frame
 motorPositions.forEach(([mx, my], i) => {
   // local frame here is our body frame (X front, Y left, Z up); converted
   // to three's local space the same way as world points (Z->Y, Y->-Z).
@@ -241,10 +281,21 @@ motorPositions.forEach(([mx, my], i) => {
   arm.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), armVec.clone().normalize());
   droneGroup.add(arm);
 
-  const rotor = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 0.01, 16),
+  // A plain symmetric disc spinning looks static - give it an
+  // off-center blade marker so rotation is actually visible, not just
+  // theoretically happening. Grouped so the whole assembly spins
+  // together about its local axis each frame, driven by real omega.
+  const rotorGroup = new THREE.Group();
+  rotorGroup.position.copy(armVec);
+  const disc = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 0.01, 16),
     spin[i] > 0 ? rotorMatCCW : rotorMatCW);
-  rotor.position.copy(armVec);
-  droneGroup.add(rotor);
+  rotorGroup.add(disc);
+  const blade = new THREE.Mesh(new THREE.BoxGeometry(0.13, 0.012, 0.02),
+    new THREE.MeshStandardMaterial({ color: 0x0a0b0d }));
+  blade.position.set(0.03, 0.008, 0);
+  rotorGroup.add(blade);
+  droneGroup.add(rotorGroup);
+  rotorGroups.push({ group: rotorGroup, spinSign: spin[i], motorIndex: i });
 });
 droneGroup.scale.setScalar(VISUAL_SCALE);
 scene.add(droneGroup);
@@ -280,6 +331,72 @@ function resize() {
 }
 window.addEventListener('resize', resize);
 resize();
+
+// --- altitude reference: a vertical "ruler" from the ground straight up
+// to the drone, with rungs every meter, plus a ground marker - flying
+// in an empty void with only a distant grid gave no usable sense of
+// height at all. ---
+const altLineMat = new THREE.LineBasicMaterial({ color: 0xF2B441, transparent: true, opacity: 0.5 });
+const altLineGeom = new THREE.BufferGeometry();
+altLineGeom.setAttribute('position', new THREE.BufferAttribute(new Float32Array(6), 3));
+const altLine = new THREE.Line(altLineGeom, altLineMat);
+scene.add(altLine);
+
+const RUNG_COUNT = 20; // supports up to 20m altitude with 1m rungs
+const rungGeom = new THREE.BufferGeometry();
+rungGeom.setAttribute('position', new THREE.BufferAttribute(new Float32Array(RUNG_COUNT * 6), 3));
+const rungMat = new THREE.LineBasicMaterial({ color: 0xF2B441, transparent: true, opacity: 0.3 });
+const rungs = new THREE.LineSegments(rungGeom, rungMat);
+scene.add(rungs);
+
+const groundMarker = new THREE.Mesh(
+  new THREE.RingGeometry(0.5, 0.65, 24),
+  new THREE.MeshBasicMaterial({ color: 0xF2B441, transparent: true, opacity: 0.6, side: THREE.DoubleSide })
+);
+groundMarker.rotation.x = -Math.PI / 2;
+scene.add(groundMarker);
+
+const altLabelEl = document.getElementById('altLabel');
+
+function updateAltitudeReference(p) {
+  const top = toThreePos(p);
+  const base = new THREE.Vector3(top.x, 0, top.z);
+  const positions = altLineGeom.attributes.position.array;
+  positions[0] = base.x; positions[1] = base.y; positions[2] = base.z;
+  positions[3] = top.x; positions[4] = top.y; positions[5] = top.z;
+  altLineGeom.attributes.position.needsUpdate = true;
+
+  const rungArr = rungGeom.attributes.position.array;
+  const altitudeM = p[2];
+  let nRungs = 0;
+  for (let m = 1; m < RUNG_COUNT && m < altitudeM; m++) {
+    const y = m; // 1 sim meter = 1 three.js unit on the Y (up) axis, unscaled - the ruler is real-world scale, not the visually-exaggerated drone model
+    const halfW = 0.18;
+    const idx = nRungs * 6;
+    rungArr[idx] = base.x - halfW; rungArr[idx + 1] = y; rungArr[idx + 2] = base.z;
+    rungArr[idx + 3] = base.x + halfW; rungArr[idx + 4] = y; rungArr[idx + 5] = base.z;
+    nRungs++;
+  }
+  rungGeom.setDrawRange(0, nRungs * 2);
+  rungGeom.attributes.position.needsUpdate = true;
+
+  groundMarker.position.set(base.x, 0.01, base.z);
+
+  // HTML label at the ground marker, positioned via camera projection -
+  // simplest robust way to put real text in a 3D scene without a
+  // sprite/font-texture pipeline.
+  const screenPos = base.clone().project(camera);
+  if (screenPos.z < 1) {
+    const sx = (screenPos.x * 0.5 + 0.5) * window.innerWidth;
+    const sy = (-screenPos.y * 0.5 + 0.5) * window.innerHeight;
+    altLabelEl.style.display = 'block';
+    altLabelEl.style.left = sx + 'px';
+    altLabelEl.style.top = sy + 'px';
+    altLabelEl.textContent = altitudeM.toFixed(1) + ' m';
+  } else {
+    altLabelEl.style.display = 'none';
+  }
+}
 
 // --- simulation wiring ---
 const drone = new VisLoc3D.Drone();
@@ -352,38 +469,51 @@ const fixEls = {
   fixCorrErr: document.getElementById('fixCorrErr'),
   fixInliers: document.getElementById('fixInliers'),
   fixFrame: document.getElementById('fixFrame'),
+  fixCapturedAt: document.getElementById('fixCapturedAt'),
 };
 
 fixEls.fixBtn.addEventListener('click', async () => {
   const apiUrl = fixEls.apiUrlInput.value.trim().replace(/\/$/, '');
-  if (!apiUrl) { alert('Enter the deployed API URL first (see render.yaml in the repo).'); return; }
+  if (!apiUrl) { alert('Enter the deployed API URL first.'); return; }
 
-  const p = drone.state.p;
+  // Capture the exact state this fix is taken at - the live sim keeps
+  // flying during the network round-trip, so anything read from `drone`
+  // later (rather than these captured values) could describe a
+  // different moment than the result actually reflects.
+  const capturedP = [...drone.state.p];
+  const capturedQ = [...drone.state.q];
+  const [cRoll, cPitch, cYaw] = VisLoc3D.quatToEuler(capturedQ).map(r => (r * 180 / Math.PI).toFixed(1));
+
   const worldPos = [
-    WORLD_CENTER + p[0] * METERS_TO_WORLD_UNITS,
-    WORLD_CENTER + p[1] * METERS_TO_WORLD_UNITS,
-    Math.max(1, p[2] * METERS_TO_WORLD_UNITS),
+    WORLD_CENTER + capturedP[0] * METERS_TO_WORLD_UNITS,
+    WORLD_CENTER + capturedP[1] * METERS_TO_WORLD_UNITS,
+    Math.max(1, capturedP[2] * METERS_TO_WORLD_UNITS),
   ];
 
   fixEls.fixBtn.disabled = true;
   fixEls.fixBtn.textContent = 'Requesting...';
   fixEls.fixResult.style.display = 'block';
+  // Clear immediately, not just overwrite-on-arrival - a stale previous
+  // result sitting on screen during a multi-second cold-start round trip
+  // reads as "this is the current result" when it isn't.
   fixEls.fixStatus.textContent = 'contacting server...';
+  fixEls.fixRawErr.textContent = '—';
+  fixEls.fixCorrErr.textContent = '—';
+  fixEls.fixInliers.textContent = '—';
+  fixEls.fixFrame.style.display = 'none';
+  fixEls.fixCapturedAt.textContent = `${capturedP.map(v => v.toFixed(1)).join(', ')} m  ·  ${cRoll}°/${cPitch}°/${cYaw}°`;
 
   try {
     const res = await fetch(apiUrl + '/api/localize', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ position: worldPos, quat: drone.state.q, include_frame: true }),
+      body: JSON.stringify({ position: worldPos, quat: capturedQ, include_frame: true }),
     });
     const data = await res.json();
 
     if (!data.success) {
       fixEls.fixStatus.textContent = 'no fix (insufficient matches)';
-      fixEls.fixRawErr.textContent = '-';
-      fixEls.fixCorrErr.textContent = '-';
       fixEls.fixInliers.textContent = data.n_inliers ?? '0';
-      fixEls.fixFrame.style.display = 'none';
     } else {
       const rawErr = Math.hypot(data.raw_xy[0] - worldPos[0], data.raw_xy[1] - worldPos[1]) / METERS_TO_WORLD_UNITS;
       const corrErr = Math.hypot(data.corrected_xy[0] - worldPos[0], data.corrected_xy[1] - worldPos[1]) / METERS_TO_WORLD_UNITS;
@@ -398,13 +528,17 @@ fixEls.fixBtn.addEventListener('click', async () => {
     }
   } catch (e) {
     fixEls.fixStatus.textContent = 'request failed (CORS / server down?)';
-    fixEls.fixRawErr.textContent = '-';
-    fixEls.fixCorrErr.textContent = '-';
   } finally {
     fixEls.fixBtn.disabled = false;
     fixEls.fixBtn.textContent = 'Take a fix';
   }
 });
+
+// --- Intro explainer modal ---
+const introOverlay = document.getElementById('introOverlay');
+document.getElementById('infoBtn').addEventListener('click', () => { introOverlay.style.display = 'block'; });
+document.getElementById('introCloseBtn').addEventListener('click', () => { introOverlay.style.display = 'none'; });
+
 
 function updateTelemetry() {
   const p = drone.state.p;
@@ -424,6 +558,25 @@ function updateTelemetry() {
 }
 
 let lastTime = performance.now();
+let motorsCut = false;
+const cutMotorsBtn = document.getElementById('cutMotorsBtn');
+cutMotorsBtn.addEventListener('click', () => {
+  motorsCut = !motorsCut;
+  if (motorsCut) {
+    cutMotorsBtn.textContent = 'Re-engage motors';
+    cutMotorsBtn.style.color = 'var(--text)';
+    cutMotorsBtn.style.borderColor = 'var(--text-faint)';
+  } else {
+    // Resuming the controller from an arbitrary fallen state without
+    // clearing its integrator would otherwise produce a sharp,
+    // unrealistic kick - same reset() used by the Reset button.
+    drone.controller.reset();
+    cutMotorsBtn.textContent = 'Cut motors (watch gravity)';
+    cutMotorsBtn.style.color = 'var(--coral)';
+    cutMotorsBtn.style.borderColor = 'var(--coral)';
+  }
+});
+
 function animate() {
   requestAnimationFrame(animate);
   const now = performance.now();
@@ -437,16 +590,42 @@ function animate() {
     let remaining = frameDt;
     while (remaining > 1e-6) {
       const step = Math.min(DT, remaining);
-      drone.step(target, targetYaw, step);
+      if (motorsCut) {
+        // Bypass the controller and motor mixing entirely - zero thrust,
+        // zero torque, straight into the same validated rigid-body
+        // integrator used everywhere else. This is what actually makes
+        // gravity visible: the controller normally cancels it perfectly,
+        // every single step, which is exactly why it's otherwise invisible.
+        drone.state = VisLoc3D.rk4Step(drone.state, drone.bodyParams, [0, 0, 0], [0, 0, 0], step);
+        drone.lastOmegaSq = [0, 0, 0, 0];
+        drone.lastElecPower = 0;
+      } else {
+        drone.step(target, targetYaw, step);
+      }
       remaining -= step;
     }
     pushTrail(drone.state.p);
+    if (drone.state.p[2] <= 0.02 && motorsCut) {
+      // Hit the ground while falling - stop there rather than tunneling
+      // through it; this viewer has no ground-collision model beyond this.
+      drone.state.p[2] = 0.02;
+      drone.state.v = [0, 0, 0];
+    }
   }
 
   droneGroup.position.copy(toThreePos(drone.state.p));
   droneGroup.quaternion.copy(toThreeQuat(drone.state.q));
   controls.target.lerp(droneGroup.position, 0.04);
 
+  // Spin each rotor proportional to its actual commanded speed (rad/s) -
+  // a static colored disc gives no visual confirmation the motors are
+  // doing anything at all.
+  rotorGroups.forEach(({ group, spinSign, motorIndex }) => {
+    const omega = Math.sqrt(Math.max(0, drone.lastOmegaSq[motorIndex]));
+    group.rotation.y += spinSign * omega * frameDt * 0.15; // visual rate, not 1:1 (real prop RPM would be an unreadable blur)
+  });
+
+  updateAltitudeReference(drone.state.p);
   updateTelemetry();
   controls.update();
   renderer.render(scene, camera);
